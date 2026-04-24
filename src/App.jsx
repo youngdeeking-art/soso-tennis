@@ -7,7 +7,7 @@ import.meta.env.VITE_SUPABASE_URL,
 import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-const DELETE_PASSWORD = ‘soso1234’;
+const DELETE_PASSWORD = 'soso1234';
 
 const getMatchType = (players, allMembers) => {
 const getGender = (id) => {
