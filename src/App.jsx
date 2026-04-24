@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from ‘react’;
 import { createClient } from ‘@supabase/supabase-js’;
-import { Trophy, Plus, Users, Calendar, Award, X, Trash2, ChevronLeft, ChevronRight, Check } from ‘lucide-react’;
+import { Trophy, Plus, Users, Calendar, Award, X, Trash2, ChevronLeft, ChevronRight, Check, Pencil, Lock } from ‘lucide-react’;
 
 const supabase = createClient(
 import.meta.env.VITE_SUPABASE_URL,
@@ -16,10 +16,15 @@ const [matches, setMatches] = useState([]);
 const [attendance, setAttendance] = useState({});
 const [loading, setLoading] = useState(true);
 
+// 멤버 관련
 const [showAddMember, setShowAddMember] = useState(false);
-const [showAddMatch, setShowAddMatch] = useState(false);
 const [newMemberName, setNewMemberName] = useState(’’);
+const [editingMember, setEditingMember] = useState(null); // {id, name}
+const [editMemberName, setEditMemberName] = useState(’’);
 
+// 경기 관련
+const [showAddMatch, setShowAddMatch] = useState(false);
+const [editingMatch, setEditingMatch] = useState(null);
 const [teamA1, setTeamA1] = useState(’’);
 const [teamA2, setTeamA2] = useState(’’);
 const [teamB1, setTeamB1] = useState(’’);
@@ -28,6 +33,7 @@ const [scoreA, setScoreA] = useState(’’);
 const [scoreB, setScoreB] = useState(’’);
 const [matchDate, setMatchDate] = useState(new Date().toISOString().split(‘T’)[0]);
 
+// 캘린더
 const [calendarMonth, setCalendarMonth] = useState(new Date());
 const [selectedDate, setSelectedDate] = useState(null);
 
@@ -47,7 +53,8 @@ const { data: att } = await supabase.from(‘attendance’).select(’*’);
     teamA1: x.team_a1, teamA2: x.team_a2,
     teamB1: x.team_b1, teamB2: x.team_b2,
     scoreA: x.score_a, scoreB: x.score_b,
-    date: x.match_date
+    date: x.match_date,
+    confirmed: x.confirmed || false
   })));
 
   const attMap = {};
@@ -67,13 +74,11 @@ const { data: att } = await supabase.from(‘attendance’).select(’*’);
 
 const checkPassword = () => {
 const pw = prompt(‘삭제 비밀번호를 입력하세요:’);
-if (pw !== DELETE_PASSWORD) {
-alert(‘비밀번호가 틀렸습니다.’);
-return false;
-}
+if (pw !== DELETE_PASSWORD) { alert(‘비밀번호가 틀렸습니다.’); return false; }
 return true;
 };
 
+// 멤버 추가
 const addMember = async () => {
 if (!newMemberName.trim()) return;
 const newMember = { id: Date.now().toString(), name: newMemberName.trim() };
@@ -84,6 +89,17 @@ setNewMemberName(’’);
 setShowAddMember(false);
 };
 
+// 멤버 수정
+const saveMember = async () => {
+if (!editMemberName.trim()) return;
+const { error } = await supabase.from(‘members’).update({ name: editMemberName.trim() }).eq(‘id’, editingMember.id);
+if (error) { alert(‘수정 실패: ’ + error.message); return; }
+setMembers(members.map(m => m.id === editingMember.id ? { …m, name: editMemberName.trim() } : m));
+setEditingMember(null);
+setEditMemberName(’’);
+};
+
+// 멤버 삭제
 const deleteMember = async (id) => {
 if (!checkPassword()) return;
 if (!confirm(‘이 멤버를 삭제하시겠습니까?’)) return;
@@ -96,39 +112,89 @@ const isValidMatch = teamA1 && teamA2 && teamB1 && teamB2
 && new Set([teamA1, teamA2, teamB1, teamB2]).size === 4
 && scoreA !== ‘’ && scoreB !== ‘’;
 
-const addMatch = async () => {
-if (!isValidMatch) return;
-const newMatch = {
-id: Date.now().toString(),
-team_a1: teamA1, team_a2: teamA2,
-team_b1: teamB1, team_b2: teamB2,
-score_a: parseInt(scoreA),
-score_b: parseInt(scoreB),
-match_date: matchDate
+const openAddMatch = (date) => {
+setEditingMatch(null);
+setTeamA1(’’); setTeamA2(’’); setTeamB1(’’); setTeamB2(’’);
+setScoreA(’’); setScoreB(’’);
+setMatchDate(date || new Date().toISOString().split(‘T’)[0]);
+setShowAddMatch(true);
 };
-const { error } = await supabase.from(‘matches’).insert(newMatch);
-if (error) { alert(’저장 실패: ’ + error.message); return; }
+
+const openEditMatch = (match) => {
+setEditingMatch(match);
+setTeamA1(match.teamA1); setTeamA2(match.teamA2);
+setTeamB1(match.teamB1); setTeamB2(match.teamB2);
+setScoreA(String(match.scoreA)); setScoreB(String(match.scoreB));
+setMatchDate(match.date);
+setShowAddMatch(true);
+};
+
+// 경기 저장 (추가 or 수정)
+const saveMatch = async () => {
+if (!isValidMatch) return;
 
 ```
-const players = [teamA1, teamA2, teamB1, teamB2];
-await supabase.from('attendance').upsert(
-  players.map(id => ({ attend_date: matchDate, member_id: id })),
-  { onConflict: 'attend_date,member_id' }
-);
+if (editingMatch) {
+  // 수정
+  const { error } = await supabase.from('matches').update({
+    team_a1: teamA1, team_a2: teamA2,
+    team_b1: teamB1, team_b2: teamB2,
+    score_a: parseInt(scoreA), score_b: parseInt(scoreB),
+    match_date: matchDate
+  }).eq('id', editingMatch.id);
+  if (error) { alert('수정 실패: ' + error.message); return; }
+} else {
+  // 추가
+  const newMatch = {
+    id: Date.now().toString(),
+    team_a1: teamA1, team_a2: teamA2,
+    team_b1: teamB1, team_b2: teamB2,
+    score_a: parseInt(scoreA), score_b: parseInt(scoreB),
+    match_date: matchDate, confirmed: false
+  };
+  const { error } = await supabase.from('matches').insert(newMatch);
+  if (error) { alert('저장 실패: ' + error.message); return; }
+
+  // 4명 자동 참석 처리
+  await supabase.from('attendance').upsert(
+    [teamA1, teamA2, teamB1, teamB2].map(id => ({ attend_date: matchDate, member_id: id })),
+    { onConflict: 'attend_date,member_id' }
+  );
+}
 
 setTeamA1(''); setTeamA2(''); setTeamB1(''); setTeamB2('');
 setScoreA(''); setScoreB('');
 setMatchDate(new Date().toISOString().split('T')[0]);
 setShowAddMatch(false);
+setEditingMatch(null);
 await loadData();
 ```
 
 };
 
-const deleteMatch = async (id) => {
+// 경기 삭제
+const deleteMatch = async (match) => {
+if (match.confirmed) {
 if (!checkPassword()) return;
+}
 if (!confirm(‘이 경기 기록을 삭제하시겠습니까?’)) return;
-await supabase.from(‘matches’).delete().eq(‘id’, id);
+await supabase.from(‘matches’).delete().eq(‘id’, match.id);
+await loadData();
+};
+
+// 날짜 전체 경기 확정
+const confirmDateMatches = async (date) => {
+const dateMatches = matches.filter(m => m.date === date && !m.confirmed);
+if (dateMatches.length === 0) { alert(‘확정할 경기가 없습니다.’); return; }
+if (!confirm(`${date} 경기 ${dateMatches.length}개를 확정하시겠습니까?\n확정 후 삭제하려면 비밀번호가 필요합니다.`)) return;
+await supabase.from(‘matches’).update({ confirmed: true }).eq(‘match_date’, date);
+await loadData();
+};
+
+// 날짜 확정 해제
+const unconfirmDateMatches = async (date) => {
+if (!checkPassword()) return;
+await supabase.from(‘matches’).update({ confirmed: false }).eq(‘match_date’, date);
 await loadData();
 };
 
@@ -191,6 +257,8 @@ setCalendarMonth(d);
 
 const selectedDateMatches = selectedDate ? matches.filter(m => m.date === selectedDate) : [];
 const selectedDateAttendees = selectedDate ? (attendance[selectedDate] || []) : [];
+const isDateConfirmed = selectedDateMatches.length > 0 && selectedDateMatches.every(m => m.confirmed);
+const hasUnconfirmed = selectedDateMatches.some(m => !m.confirmed);
 
 const MemberSelect = ({ value, onChange, label, exclude = [] }) => (
 <select value={value} onChange={e => onChange(e.target.value)}
@@ -252,6 +320,7 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
 
   <main className="max-w-6xl mx-auto px-4 py-6 pb-32">
 
+    {/* 캘린더 */}
     {activeTab === 'calendar' && (
       <div className="space-y-4">
         <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
@@ -270,6 +339,7 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
               if (!d) return <div key={idx} className="aspect-square border-b border-r border-stone-50"></div>;
               const dayAtt = attendance[d.dateStr] || [];
               const dayMatches = matches.filter(m => m.date === d.dateStr);
+              const allConfirmed = dayMatches.length > 0 && dayMatches.every(m => m.confirmed);
               const isToday = d.dateStr === new Date().toISOString().split('T')[0];
               const isSelected = selectedDate === d.dateStr;
               const weekday = idx % 7;
@@ -282,7 +352,11 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                   {(dayAtt.length > 0 || dayMatches.length > 0) && (
                     <div className="absolute bottom-1 left-1 right-1 flex flex-col gap-0.5">
                       {dayAtt.length > 0 && <div className="text-[10px] bg-emerald-100 text-emerald-800 rounded px-1 py-0.5 font-medium flex items-center gap-0.5"><Users size={8}/>{dayAtt.length}</div>}
-                      {dayMatches.length > 0 && <div className="text-[10px] bg-yellow-100 text-yellow-800 rounded px-1 py-0.5 font-medium">🎾 {dayMatches.length}</div>}
+                      {dayMatches.length > 0 && (
+                        <div className={`text-[10px] rounded px-1 py-0.5 font-medium flex items-center gap-0.5 ${allConfirmed ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                          {allConfirmed ? <Lock size={8}/> : '🎾'} {dayMatches.length}
+                        </div>
+                      )}
                     </div>
                   )}
                 </button>
@@ -291,13 +365,30 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
           </div>
         </div>
 
+        {/* 범례 */}
+        <div className="flex gap-3 text-xs text-stone-500 px-1">
+          <div className="flex items-center gap-1">
+            <span className="inline-block bg-emerald-100 text-emerald-800 rounded px-1.5 py-0.5 font-medium"><Users size={10} className="inline"/> N</span> 참석
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="inline-block bg-yellow-100 text-yellow-800 rounded px-1.5 py-0.5 font-medium">🎾 N</span> 경기
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="inline-block bg-blue-100 text-blue-800 rounded px-1.5 py-0.5 font-medium"><Lock size={10} className="inline"/> N</span> 확정
+          </div>
+        </div>
+
         {selectedDate && (
           <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
             <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
-              <h3 className="font-bold text-stone-800">{selectedDate.replace(/-/g, '.')}</h3>
+              <h3 className="font-bold text-stone-800 flex items-center gap-2">
+                {selectedDate.replace(/-/g, '.')}
+                {isDateConfirmed && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1"><Lock size={10}/>확정</span>}
+              </h3>
               <button onClick={() => setSelectedDate(null)}><X size={16} className="text-stone-400" /></button>
             </div>
             <div className="p-4 space-y-4">
+              {/* 참석자 */}
               <div>
                 <div className="text-sm font-semibold text-stone-700 flex items-center gap-1.5 mb-2">
                   <Users size={14} /> 참석자 ({selectedDateAttendees.length})
@@ -318,18 +409,34 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                 </div>
               </div>
 
+              {/* 경기 목록 */}
               {selectedDateMatches.length > 0 && (
                 <div>
                   <div className="text-sm font-semibold text-stone-700 mb-2">🎾 경기 ({selectedDateMatches.length})</div>
                   <div className="space-y-2">
                     {selectedDateMatches.map(match => (
-                      <div key={match.id} className="p-3 bg-stone-50 rounded-lg">
+                      <div key={match.id} className={`p-3 rounded-lg border ${match.confirmed ? 'bg-blue-50 border-blue-200' : 'bg-stone-50 border-stone-200'}`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          {match.confirmed
+                            ? <span className="text-xs text-blue-600 flex items-center gap-0.5"><Lock size={10}/>확정</span>
+                            : <span className="text-xs text-stone-400">미확정</span>
+                          }
+                          <div className="flex-1"></div>
+                          {!match.confirmed && (
+                            <button onClick={() => openEditMatch(match)} className="text-stone-400 p-1">
+                              <Pencil size={13} />
+                            </button>
+                          )}
+                          <button onClick={() => deleteMatch(match)} className="text-stone-300 p-1">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                         <div className="flex items-center gap-2">
                           <div className={`flex-1 text-sm min-w-0 ${match.scoreA > match.scoreB ? 'font-bold text-emerald-800' : 'text-stone-500'}`}>
                             <div className="truncate">{getMemberName(match.teamA1)}</div>
                             <div className="truncate">{getMemberName(match.teamA2)}</div>
                           </div>
-                          <div className="font-mono font-bold text-stone-700 bg-white px-2 py-0.5 rounded border border-stone-200 text-sm flex-shrink-0">
+                          <div className="font-mono font-bold text-stone-700 bg-white px-2 py-1 rounded border border-stone-200 text-sm flex-shrink-0">
                             {match.scoreA} - {match.scoreB}
                           </div>
                           <div className={`flex-1 text-sm text-right min-w-0 ${match.scoreB > match.scoreA ? 'font-bold text-emerald-800' : 'text-stone-500'}`}>
@@ -343,18 +450,35 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                 </div>
               )}
 
-              {members.length >= 4 && (
-                <button onClick={() => { setMatchDate(selectedDate); setShowAddMatch(true); }}
-                  className="w-full py-2.5 border border-dashed border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5">
-                  <Plus size={14} /> 이 날짜에 경기 추가
-                </button>
-              )}
+              {/* 버튼들 */}
+              <div className="space-y-2">
+                {members.length >= 4 && (
+                  <button onClick={() => openAddMatch(selectedDate)}
+                    className="w-full py-2.5 border border-dashed border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5">
+                    <Plus size={14} /> 경기 추가
+                  </button>
+                )}
+                {selectedDateMatches.length > 0 && (
+                  isDateConfirmed ? (
+                    <button onClick={() => unconfirmDateMatches(selectedDate)}
+                      className="w-full py-2.5 bg-stone-100 border border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5">
+                      <Lock size={14} /> 확정 해제 (비번 필요)
+                    </button>
+                  ) : hasUnconfirmed ? (
+                    <button onClick={() => confirmDateMatches(selectedDate)}
+                      className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5">
+                      <Lock size={14} /> 오늘 경기 확정하기
+                    </button>
+                  ) : null
+                )}
+              </div>
             </div>
           </div>
         )}
       </div>
     )}
 
+    {/* 랭킹 */}
     {activeTab === 'ranking' && (
       <div className="space-y-4">
         {stats.length === 0 ? (
@@ -387,7 +511,6 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                 })}
               </div>
             )}
-
             <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
               <div className="px-5 py-3 border-b border-stone-200 bg-stone-50">
                 <h2 className="text-lg font-bold text-stone-800">전체 랭킹</h2>
@@ -401,22 +524,17 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-stone-800 truncate">{player.name}</div>
                       <div className="text-xs text-stone-500 mt-0.5">
-                        {player.total === 0
-                          ? `경기 없음 · 출석 ${player.attendanceCount}회`
-                          : `${player.wins}승 ${player.losses}패 · 출석 ${player.attendanceCount}회`}
+                        {player.total === 0 ? `경기 없음 · 출석 ${player.attendanceCount}회` : `${player.wins}승 ${player.losses}패 · 출석 ${player.attendanceCount}회`}
                       </div>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-xl font-bold text-emerald-700">
-                        {player.total === 0 ? '-' : `${player.winRate.toFixed(1)}%`}
-                      </div>
+                      <div className="text-xl font-bold text-emerald-700">{player.total === 0 ? '-' : `${player.winRate.toFixed(1)}%`}</div>
                       <div className="text-xs text-stone-400">승률</div>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-
             {stats.some(s => s.total > 0 || s.attendanceCount > 0) && (
               <div className="bg-gradient-to-br from-stone-900 to-stone-800 text-white rounded-lg p-6">
                 <div className="flex items-center gap-2 mb-4">
@@ -424,18 +542,10 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                   <h3 className="text-lg font-bold">{currentYear} 소소테니스클럽 연말 시상</h3>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <AwardCard label="MVP · 최고 승률"
-                    winner={stats.filter(s=>s.total>0)[0]?.name}
-                    value={stats.filter(s=>s.total>0)[0] ? `${stats.filter(s=>s.total>0)[0].winRate.toFixed(1)}%` : '-'} />
-                  <AwardCard label="다승왕"
-                    winner={[...stats].sort((a,b)=>b.wins-a.wins)[0]?.name}
-                    value={`${[...stats].sort((a,b)=>b.wins-a.wins)[0]?.wins || 0}승`} />
-                  <AwardCard label="개근상 · 최다 출석"
-                    winner={[...stats].sort((a,b)=>b.attendanceCount-a.attendanceCount)[0]?.name}
-                    value={`${[...stats].sort((a,b)=>b.attendanceCount-a.attendanceCount)[0]?.attendanceCount || 0}회`} />
-                  <AwardCard label="투혼상 · 최다 경기"
-                    winner={[...stats].sort((a,b)=>b.total-a.total)[0]?.name}
-                    value={`${[...stats].sort((a,b)=>b.total-a.total)[0]?.total || 0}경기`} />
+                  <AwardCard label="MVP · 최고 승률" winner={stats.filter(s=>s.total>0)[0]?.name} value={stats.filter(s=>s.total>0)[0] ? `${stats.filter(s=>s.total>0)[0].winRate.toFixed(1)}%` : '-'} />
+                  <AwardCard label="다승왕" winner={[...stats].sort((a,b)=>b.wins-a.wins)[0]?.name} value={`${[...stats].sort((a,b)=>b.wins-a.wins)[0]?.wins||0}승`} />
+                  <AwardCard label="개근상 · 최다 출석" winner={[...stats].sort((a,b)=>b.attendanceCount-a.attendanceCount)[0]?.name} value={`${[...stats].sort((a,b)=>b.attendanceCount-a.attendanceCount)[0]?.attendanceCount||0}회`} />
+                  <AwardCard label="투혼상 · 최다 경기" winner={[...stats].sort((a,b)=>b.total-a.total)[0]?.name} value={`${[...stats].sort((a,b)=>b.total-a.total)[0]?.total||0}경기`} />
                 </div>
               </div>
             )}
@@ -444,10 +554,11 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
       </div>
     )}
 
+    {/* 경기 목록 */}
     {activeTab === 'matches' && (
       <div>
         {matches.length === 0 ? (
-          <EmptyState icon={Calendar} title="경기 기록이 없습니다" desc="아래 + 버튼으로 경기를 추가하세요" />
+          <EmptyState icon={Calendar} title="경기 기록이 없습니다" desc="캘린더에서 날짜를 선택해 경기를 추가하세요" />
         ) : (
           <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
             <div className="px-5 py-3 border-b border-stone-200 bg-stone-50">
@@ -458,10 +569,15 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                 <div key={match.id} className="px-4 py-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs text-stone-400 font-mono">{match.date.slice(5)}</span>
+                    {match.confirmed
+                      ? <span className="text-xs text-blue-500 flex items-center gap-0.5"><Lock size={9}/>확정</span>
+                      : <span className="text-xs text-stone-300">미확정</span>
+                    }
                     <div className="flex-1"></div>
-                    <button onClick={() => deleteMatch(match.id)} className="text-stone-300 p-1">
-                      <Trash2 size={13} />
-                    </button>
+                    {!match.confirmed && (
+                      <button onClick={() => openEditMatch(match)} className="text-stone-300 p-1"><Pencil size={13}/></button>
+                    )}
+                    <button onClick={() => deleteMatch(match)} className="text-stone-300 p-1"><Trash2 size={13}/></button>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className={`flex-1 text-sm min-w-0 ${match.scoreA > match.scoreB ? 'font-bold text-emerald-800' : 'text-stone-500'}`}>
@@ -484,6 +600,7 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
       </div>
     )}
 
+    {/* 멤버 */}
     {activeTab === 'members' && (
       <div>
         {members.length === 0 ? (
@@ -501,9 +618,14 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
                     {member.total === 0 ? `출석 ${member.attendanceCount}회` : `${member.wins}승 ${member.losses}패 · 출석 ${member.attendanceCount}회`}
                   </div>
                 </div>
-                <button onClick={() => deleteMember(member.id)} className="text-stone-300 p-2">
-                  <Trash2 size={16} />
-                </button>
+                <div className="flex gap-1">
+                  <button onClick={() => { setEditingMember(member); setEditMemberName(member.name); }} className="text-stone-400 p-2">
+                    <Pencil size={15} />
+                  </button>
+                  <button onClick={() => deleteMember(member.id)} className="text-stone-300 p-2">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -512,27 +634,26 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
     )}
   </main>
 
+  {/* FABs */}
   <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-20">
     {activeTab === 'members' && (
-      <button onClick={() => setShowAddMember(true)}
-        className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2">
+      <button onClick={() => setShowAddMember(true)} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2">
         <Plus size={18} /><span className="font-medium text-sm">멤버 추가</span>
       </button>
     )}
-    {(activeTab === 'matches' || activeTab === 'ranking' || activeTab === 'calendar') && members.length >= 4 && (
-      <button onClick={() => setShowAddMatch(true)}
-        className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2">
+    {(activeTab === 'matches' || activeTab === 'ranking') && members.length >= 4 && (
+      <button onClick={() => openAddMatch()} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2">
         <Plus size={18} /><span className="font-medium text-sm">경기 기록</span>
       </button>
     )}
   </div>
 
+  {/* 멤버 추가 모달 */}
   {showAddMember && (
     <Modal onClose={() => setShowAddMember(false)} title="멤버 추가">
       <input type="text" value={newMemberName} onChange={e => setNewMemberName(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && addMember()}
-        placeholder="이름" autoFocus
-        className="w-full px-4 py-3 border border-stone-300 rounded-lg mb-4" />
+        placeholder="이름" autoFocus className="w-full px-4 py-3 border border-stone-300 rounded-lg mb-4" />
       <div className="flex gap-2">
         <button onClick={() => setShowAddMember(false)} className="flex-1 px-4 py-2.5 border border-stone-300 text-stone-700 rounded-lg font-medium">취소</button>
         <button onClick={addMember} className="flex-1 px-4 py-2.5 bg-emerald-800 text-white rounded-lg font-medium">추가</button>
@@ -540,15 +661,28 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
     </Modal>
   )}
 
+  {/* 멤버 수정 모달 */}
+  {editingMember && (
+    <Modal onClose={() => setEditingMember(null)} title="멤버 이름 수정">
+      <input type="text" value={editMemberName} onChange={e => setEditMemberName(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && saveMember()}
+        autoFocus className="w-full px-4 py-3 border border-stone-300 rounded-lg mb-4" />
+      <div className="flex gap-2">
+        <button onClick={() => setEditingMember(null)} className="flex-1 px-4 py-2.5 border border-stone-300 text-stone-700 rounded-lg font-medium">취소</button>
+        <button onClick={saveMember} className="flex-1 px-4 py-2.5 bg-emerald-800 text-white rounded-lg font-medium">저장</button>
+      </div>
+    </Modal>
+  )}
+
+  {/* 경기 추가/수정 모달 */}
   {showAddMatch && (
-    <Modal onClose={() => setShowAddMatch(false)} title="복식 경기 기록">
+    <Modal onClose={() => { setShowAddMatch(false); setEditingMatch(null); }} title={editingMatch ? '경기 수정' : '복식 경기 기록'}>
       <div className="space-y-3">
         <div>
           <label className="block text-xs font-medium text-stone-600 mb-1.5">경기일</label>
           <input type="date" value={matchDate} onChange={e => setMatchDate(e.target.value)}
             className="w-full px-3 py-2.5 border border-stone-300 rounded-lg" />
         </div>
-
         <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
           <div className="flex items-center justify-between mb-2">
             <label className="text-xs font-bold text-emerald-800">🏆 팀 A</label>
@@ -563,10 +697,8 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
             <MemberSelect value={teamA2} onChange={setTeamA2} label="선수 2" exclude={[teamA1, teamB1, teamB2].filter(Boolean)} />
           </div>
           <input type="number" min="0" value={scoreA} onChange={e => setScoreA(e.target.value)}
-            placeholder="팀 A 게임 수"
-            className="w-full px-3 py-2 border border-stone-300 rounded-lg text-center font-mono text-lg" />
+            placeholder="팀 A 게임 수" className="w-full px-3 py-2 border border-stone-300 rounded-lg text-center font-mono text-lg" />
         </div>
-
         <div className="bg-stone-50 border border-stone-200 rounded-lg p-3">
           <div className="flex items-center justify-between mb-2">
             <label className="text-xs font-bold text-stone-600">팀 B</label>
@@ -581,15 +713,14 @@ backgroundImage: ‘repeating-linear-gradient(45deg, transparent, transparent 20
             <MemberSelect value={teamB2} onChange={setTeamB2} label="선수 2" exclude={[teamA1, teamA2, teamB1].filter(Boolean)} />
           </div>
           <input type="number" min="0" value={scoreB} onChange={e => setScoreB(e.target.value)}
-            placeholder="팀 B 게임 수"
-            className="w-full px-3 py-2 border border-stone-300 rounded-lg text-center font-mono text-lg" />
+            placeholder="팀 B 게임 수" className="w-full px-3 py-2 border border-stone-300 rounded-lg text-center font-mono text-lg" />
         </div>
       </div>
-
       <div className="flex gap-2 mt-5">
-        <button onClick={() => setShowAddMatch(false)} className="flex-1 px-4 py-2.5 border border-stone-300 text-stone-700 rounded-lg font-medium">취소</button>
-        <button onClick={addMatch} disabled={!isValidMatch}
-          className="flex-1 px-4 py-2.5 bg-emerald-800 text-white rounded-lg font-medium disabled:bg-stone-300">저장</button>
+        <button onClick={() => { setShowAddMatch(false); setEditingMatch(null); }} className="flex-1 px-4 py-2.5 border border-stone-300 text-stone-700 rounded-lg font-medium">취소</button>
+        <button onClick={saveMatch} disabled={!isValidMatch} className="flex-1 px-4 py-2.5 bg-emerald-800 text-white rounded-lg font-medium disabled:bg-stone-300">
+          {editingMatch ? '수정 완료' : '저장'}
+        </button>
       </div>
     </Modal>
   )}
