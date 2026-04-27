@@ -78,6 +78,7 @@ export default function App() {
   const [attendance, setAttendance] = useState({});
   const [officers, setOfficers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [guestCounts, setGuestCounts] = useState({});
 
   // 멤버 관련
   const [showAddMember, setShowAddMember] = useState(false);
@@ -158,6 +159,10 @@ export default function App() {
       });
       setAttendance(attMap);
       setOfficers(off || []);
+      const { data: gc } = await supabase.from('guest_attendance').select('*');
+      const gcMap = {};
+      (gc || []).forEach(g => { gcMap[g.attend_date] = g.guest_count; });
+      setGuestCounts(gcMap);
     } catch (e) {
       alert('데이터 로딩 실패.');
     } finally {
@@ -320,10 +325,9 @@ export default function App() {
   };
 
   const updateGuestCount = async (date, count) => {
-    const dateMatches = matches.filter(m => m.date === date);
-    if (dateMatches.length === 0) return;
-    await supabase.from('matches').update({ guest_count: count }).eq('match_date', date);
-    await loadData();
+    const newCount = Math.max(0, count);
+    await supabase.from('guest_attendance').upsert({ attend_date: date, guest_count: newCount }, { onConflict: 'attend_date' });
+    setGuestCounts(prev => ({ ...prev, [date]: newCount }));
   };
 
   const getMemberName = (id) => {
@@ -517,7 +521,7 @@ export default function App() {
   const selectedDateAttendees = selectedDate ? (attendance[selectedDate] || []) : [];
   const isDateConfirmed = selectedDateMatches.length > 0 && selectedDateMatches.every(m => m.confirmed);
   const hasUnconfirmed = selectedDateMatches.some(m => !m.confirmed);
-  const selectedDateGuestCount = selectedDateMatches.length > 0 ? (selectedDateMatches[0].guestCount || 0) : 0;
+  const selectedDateGuestCount = selectedDate ? (guestCounts[selectedDate] || 0) : 0;
   const availablePlayers = showAddMatch ? getAvailablePlayers(matchDate) : [];
 
   const MemberSelect = ({ value, onChange, label, exclude = [], posLabel }) => (
