@@ -79,6 +79,7 @@ export default function App() {
   const [officers, setOfficers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [guestCounts, setGuestCounts] = useState({});
+  const [attendanceConfirmed, setAttendanceConfirmed] = useState({});
 
   // 멤버 관련
   const [showAddMember, setShowAddMember] = useState(false);
@@ -163,6 +164,10 @@ export default function App() {
       const gcMap = {};
       (gc || []).forEach(g => { gcMap[g.attend_date] = g.guest_count; });
       setGuestCounts(gcMap);
+      const { data: ac } = await supabase.from('attendance_confirmed').select('*');
+      const acMap = {};
+      (ac || []).forEach(a => { acMap[a.attend_date] = a.confirmed; });
+      setAttendanceConfirmed(acMap);
     } catch (e) {
       alert('데이터 로딩 실패.');
     } finally {
@@ -314,7 +319,22 @@ export default function App() {
     await loadData();
   };
 
+  const confirmAttendance = async (date) => {
+    if (!checkPassword()) return;
+    await supabase.from('attendance_confirmed').upsert({ attend_date: date, confirmed: true }, { onConflict: 'attend_date' });
+    setAttendanceConfirmed(prev => ({ ...prev, [date]: true }));
+  };
+
+  const unconfirmAttendance = async (date) => {
+    if (!checkPassword()) return;
+    await supabase.from('attendance_confirmed').upsert({ attend_date: date, confirmed: false }, { onConflict: 'attend_date' });
+    setAttendanceConfirmed(prev => ({ ...prev, [date]: false }));
+  };
+
   const toggleAttendance = async (date, memberId) => {
+    if (attendanceConfirmed[date]) {
+      if (!checkPassword()) return;
+    }
     const current = attendance[date] || [];
     if (current.includes(memberId)) {
       await supabase.from('attendance').delete().eq('attend_date', date).eq('member_id', memberId);
@@ -738,7 +758,10 @@ export default function App() {
                   <div className="border border-stone-200 rounded-lg overflow-hidden">
                     <button onClick={() => setAttendanceOpen(!attendanceOpen)}
                       className="w-full flex items-center justify-between px-3 py-2.5 bg-stone-50 text-sm font-semibold text-stone-700">
-                      <div className="flex items-center gap-1.5"><Users size={14}/>참석자 ({selectedDateAttendees.length}명)</div>
+                      <div className="flex items-center gap-1.5">
+                        <Users size={14}/>참석자 ({selectedDateAttendees.length}명)
+                        {attendanceConfirmed[selectedDate] && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><Lock size={9}/>확정</span>}
+                      </div>
                       {attendanceOpen ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                     </button>
                     {attendanceOpen && (
@@ -776,6 +799,18 @@ export default function App() {
                         <div className="text-xs text-stone-400 px-1">
                           총 {selectedDateAttendees.length + selectedDateGuestCount}명 참석
                         </div>
+                        {/* 참석 확정 버튼 */}
+                        {attendanceConfirmed[selectedDate] ? (
+                          <button onClick={() => unconfirmAttendance(selectedDate)}
+                            className="w-full py-2 bg-stone-100 border border-stone-300 rounded-lg text-xs text-stone-600 flex items-center justify-center gap-1.5">
+                            <Lock size={12}/> 참석 확정 해제 (비번 필요)
+                          </button>
+                        ) : (
+                          <button onClick={() => confirmAttendance(selectedDate)}
+                            className="w-full py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5">
+                            <Lock size={12}/> 참석자 확정하기
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
