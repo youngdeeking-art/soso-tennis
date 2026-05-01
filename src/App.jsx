@@ -179,6 +179,7 @@ export default function App() {
   };
 
   const addDateGuest = (date, gender) => {
+    if (attendanceConfirmed[date]) { if (!checkPassword()) return; }
     const current = dateGuests[date] || [];
     const num = current.filter(g => g.gender === gender).length + 1;
     const newGuest = { id: `guest_${date}_${gender}_${Date.now()}`, name: gender === 'M' ? `남게스트${num}` : `여게스트${num}`, gender, isGuest: true };
@@ -186,6 +187,7 @@ export default function App() {
   };
 
   const removeDateGuest = (date, guestId) => {
+    if (attendanceConfirmed[date]) { if (!checkPassword()) return; }
     setDateGuests(prev => ({ ...prev, [date]: (prev[date] || []).filter(g => g.id !== guestId) }));
     if (teamA1 === guestId) setTeamA1('');
     if (teamA2 === guestId) setTeamA2('');
@@ -297,6 +299,19 @@ export default function App() {
     return members.find(m => m.id === id)?.name || '?';
   };
 
+
+  // 분석용: 게스트는 성별로 통합
+  const normalizeId = (id) => {
+    if (!id) return id;
+    if (id.startsWith("guest_")) return id.includes("_M_") ? "__GUEST_M__" : "__GUEST_F__";
+    return id;
+  };
+  const normalizeNameForAnalysis = (id) => {
+    const nid = normalizeId(id);
+    if (nid === "__GUEST_M__") return "남게스트";
+    if (nid === "__GUEST_F__") return "여게스트";
+    return members.find(m => m.id === id)?.name || "?";
+  };
   const openAddMatch = (date, scheduled = false) => {
     setEditingMatch(null);
     setTeamA1(''); setTeamA2(''); setTeamB1(''); setTeamB2('');
@@ -442,8 +457,8 @@ export default function App() {
   const getPartnerStats=()=>{
     const combos={};
     filteredMatches.forEach(m=>{
-      [{pair:[m.teamA1,m.teamA2].sort(),won:!m.isDraw&&m.scoreA>m.scoreB,draw:m.isDraw||m.scoreA===m.scoreB,sf:m.scoreA||0},
-       {pair:[m.teamB1,m.teamB2].sort(),won:!m.isDraw&&m.scoreB>m.scoreA,draw:m.isDraw||m.scoreA===m.scoreB,sf:m.scoreB||0}
+      [{pair:[normalizeId(m.teamA1),normalizeId(m.teamA2)].sort(),won:!m.isDraw&&m.scoreA>m.scoreB,draw:m.isDraw||m.scoreA===m.scoreB,sf:m.scoreA||0},
+       {pair:[normalizeId(m.teamB1),normalizeId(m.teamB2)].sort(),won:!m.isDraw&&m.scoreB>m.scoreA,draw:m.isDraw||m.scoreA===m.scoreB,sf:m.scoreB||0}
       ].forEach(({pair,won,draw,sf})=>{
         const key=pair.join('|');
         if(!combos[key])combos[key]={ids:pair,wins:0,losses:0,draws:0,ts:0};
@@ -451,20 +466,20 @@ export default function App() {
         combos[key].ts+=sf;
       });
     });
-    return Object.values(combos).map(c=>({...c,total:c.wins+c.losses+c.draws,winRate:c.wins+c.losses+c.draws>0?((c.wins+c.draws*0.5)/(c.wins+c.losses+c.draws)*100):0,avgScore:c.wins+c.losses+c.draws>0?(c.ts/(c.wins+c.losses+c.draws)).toFixed(1):0,name1:getMemberName(c.ids[0]),name2:getMemberName(c.ids[1])})).filter(c=>c.total>=1).sort((a,b)=>b.winRate-a.winRate||b.wins-a.wins);
+    return Object.values(combos).map(c=>({...c,total:c.wins+c.losses+c.draws,winRate:c.wins+c.losses+c.draws>0?((c.wins+c.draws*0.5)/(c.wins+c.losses+c.draws)*100):0,avgScore:c.wins+c.losses+c.draws>0?(c.ts/(c.wins+c.losses+c.draws)).toFixed(1):0,name1:normalizeNameForAnalysis(c.ids[0]),name2:normalizeNameForAnalysis(c.ids[1])})).filter(c=>c.total>=1).sort((a,b)=>b.winRate-a.winRate||b.wins-a.wins);
   };
 
   const getMatchupStats=()=>{
     const mu={};
     filteredMatches.forEach(m=>{
-      const tA=[m.teamA1,m.teamA2].sort().join('|'),tB=[m.teamB1,m.teamB2].sort().join('|');
+      const tA=[normalizeId(m.teamA1),normalizeId(m.teamA2)].sort().join('|'),tB=[normalizeId(m.teamB1),normalizeId(m.teamB2)].sort().join('|');
       const key=[tA,tB].sort().join('||');
-      if(!mu[key])mu[key]={teamA:[m.teamA1,m.teamA2].sort(),teamB:[m.teamB1,m.teamB2].sort(),aWins:0,bWins:0,draws:0};
+      if(!mu[key])mu[key]={teamA:[normalizeId(m.teamA1),normalizeId(m.teamA2)].sort(),teamB:[normalizeId(m.teamB1),normalizeId(m.teamB2)].sort(),aWins:0,bWins:0,draws:0};
       const draw=m.isDraw||m.scoreA===m.scoreB;
-      const isAFirst=[m.teamA1,m.teamA2].sort().join('|')===mu[key].teamA.join('|');
+      const isAFirst=[normalizeId(m.teamA1),normalizeId(m.teamA2)].sort().join('|')===mu[key].teamA.join('|');
       if(draw)mu[key].draws++;else if(m.scoreA>m.scoreB){if(isAFirst)mu[key].aWins++;else mu[key].bWins++;}else{if(isAFirst)mu[key].bWins++;else mu[key].aWins++;}
     });
-    return Object.values(mu).map(m=>({...m,total:m.aWins+m.bWins+m.draws,teamAName:m.teamA.map(id=>getMemberName(id)).join(' · '),teamBName:m.teamB.map(id=>getMemberName(id)).join(' · ')})).filter(m=>m.total>=2).sort((a,b)=>b.total-a.total);
+    return Object.values(mu).map(m=>({...m,total:m.aWins+m.bWins+m.draws,teamAName:m.teamA.map(id=>normalizeNameForAnalysis(id)).join(' · '),teamBName:m.teamB.map(id=>normalizeNameForAnalysis(id)).join(' · ')})).filter(m=>m.total>=2).sort((a,b)=>b.total-a.total);
   };
 
   const getSynergyStats=()=>members.map(member=>{
@@ -473,13 +488,14 @@ export default function App() {
       const inA=m.teamA1===member.id||m.teamA2===member.id;
       const inB=m.teamB1===member.id||m.teamB2===member.id;
       if(!inA&&!inB)return;
-      const pid=inA?(m.teamA1===member.id?m.teamA2:m.teamA1):(m.teamB1===member.id?m.teamB2:m.teamB1);
+      const rawPid=inA?(m.teamA1===member.id?m.teamA2:m.teamA1):(m.teamB1===member.id?m.teamB2:m.teamB1);
+      const pid=normalizeId(rawPid);
       const draw=m.isDraw||m.scoreA===m.scoreB;
       const won=!draw&&(inA?m.scoreA>m.scoreB:m.scoreB>m.scoreA);
       if(!ps[pid])ps[pid]={wins:0,losses:0,draws:0};
       if(draw)ps[pid].draws++;else if(won)ps[pid].wins++;else ps[pid].losses++;
     });
-    const partners=Object.entries(ps).map(([id,s])=>({id,name:getMemberName(id),...s,total:s.wins+s.losses+s.draws,winRate:s.wins+s.losses+s.draws>0?((s.wins+s.draws*0.5)/(s.wins+s.losses+s.draws)*100):0})).filter(p=>p.total>=1).sort((a,b)=>b.winRate-a.winRate);
+    const partners=Object.entries(ps).map(([id,s])=>({id,name:normalizeNameForAnalysis(id),...s,total:s.wins+s.losses+s.draws,winRate:s.wins+s.losses+s.draws>0?((s.wins+s.draws*0.5)/(s.wins+s.losses+s.draws)*100):0})).filter(p=>p.total>=1).sort((a,b)=>b.winRate-a.winRate);
     return {...member,partners};
   }).filter(m=>m.partners.length>0);
 
@@ -682,9 +698,10 @@ export default function App() {
                         <div className="grid grid-cols-2 gap-2">
                           {members.map(m=>{
                             const attended=currentAttendees.includes(m.id);
+                            const isConfirmed=attendanceConfirmed[selectedDate];
                             return(
-                              <button key={m.id} onClick={()=>toggleLocalAttendance(m.id)}
-                                className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${attended?`${getGenderBg(m.gender)} font-medium`:'bg-white border-stone-200 text-stone-600'}`}>
+                              <button key={m.id} onClick={()=>{ if(isConfirmed){if(!checkPassword())return;} toggleLocalAttendance(m.id); }}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${attended?`${getGenderBg(m.gender)} font-medium`:'bg-white border-stone-200 text-stone-600'} ${isConfirmed?'opacity-70':''}`}>
                                 <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${attended?'bg-emerald-600 border-emerald-600':'border-stone-300'}`}>
                                   {attended&&<Check size={12} className="text-white"/>}
                                 </div>
@@ -1185,10 +1202,10 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="flex gap-3 items-center">
-                <input type="number" min="0" value={inputScoreA} onChange={e=>setInputScoreA(e.target.value)} placeholder="팀A" disabled={inputIsDraw} className="flex-1 px-3 py-3 border border-stone-300 rounded-lg text-center font-mono text-xl disabled:bg-stone-100"/>
-                <div className="text-stone-400 font-bold">-</div>
-                <input type="number" min="0" value={inputScoreB} onChange={e=>setInputScoreB(e.target.value)} placeholder="팀B" disabled={inputIsDraw} className="flex-1 px-3 py-3 border border-stone-300 rounded-lg text-center font-mono text-xl disabled:bg-stone-100"/>
+              <div className="flex gap-3 items-center justify-center">
+                <input type="number" min="0" value={inputScoreA} onChange={e=>setInputScoreA(e.target.value)} placeholder="0" disabled={inputIsDraw} className="w-24 px-3 py-3 border border-stone-300 rounded-lg text-center font-mono text-2xl disabled:bg-stone-100"/>
+                <div className="text-stone-400 font-bold text-xl">-</div>
+                <input type="number" min="0" value={inputScoreB} onChange={e=>setInputScoreB(e.target.value)} placeholder="0" disabled={inputIsDraw} className="w-24 px-3 py-3 border border-stone-300 rounded-lg text-center font-mono text-2xl disabled:bg-stone-100"/>
               </div>
               <button onClick={()=>setInputIsDraw(!inputIsDraw)} className={`w-full py-2.5 rounded-lg border text-sm font-medium flex items-center justify-center gap-2 ${inputIsDraw?'bg-yellow-100 border-yellow-400 text-yellow-800':'bg-white border-stone-300 text-stone-600'}`}>
                 🤝 {inputIsDraw?'무승부로 기록':'무승부인 경우 체크'}
