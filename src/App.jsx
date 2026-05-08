@@ -1474,9 +1474,6 @@ export default function App() {
           </div>
         </Modal>
       )}
-    </div>
-  );
-}
 
       {/* 대진표 붙여넣기 모달 */}
       {showImportModal&&(
@@ -1547,6 +1544,9 @@ export default function App() {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
 
 function ComboCard({title,combos,emoji,valueColor,bgColor='bg-emerald-50',titleColor='text-emerald-800'}) {
   return(
