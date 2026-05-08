@@ -118,6 +118,10 @@ export default function App() {
   const [attendanceOpen, setAttendanceOpen] = useState(true);
 
   const [showOfficerModal, setShowOfficerModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importDate, setImportDate] = useState(new Date().toISOString().split('T')[0]);
+  const [importPreview, setImportPreview] = useState(null);
   const [officerYear, setOfficerYear] = useState(new Date().getFullYear());
   const [officerQuarter, setOfficerQuarter] = useState(Math.ceil((new Date().getMonth()+1)/3));
   const [officerMemberId, setOfficerMemberId] = useState('');
@@ -176,6 +180,145 @@ export default function App() {
     const pw = prompt('비밀번호를 입력하세요:');
     if (pw !== DELETE_PASSWORD) { alert('비밀번호가 틀렸습니다.'); return false; }
     return true;
+  };
+
+  const parseImportText = (text) => {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const attendeeNames = [];
+    const guestNames = [];
+    const matchList = [];
+    let section = '';
+    let currentMatch = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.includes('참석자')) { section = 'attendees'; continue; }
+      if (line.match(/^[■●▶]\s*\d{2}:\d{2}/)) {
+        if (currentMatch) matchList.push(currentMatch);
+        const titleMatch = line.match(/^[■●▶]\s*(\d{2}:\d{2})\s*(.*)/);
+        currentMatch = { time: titleMatch?.[1] || '', title: titleMatch?.[2] || '', teamA: [], teamB: [], side: 'A' };
+        section = 'match';
+        continue;
+      }
+      if (section === 'attendees') {
+        if (line === '남자' || line === '여자') continue;
+        const names = line.split(/[\/,]/).map(n => n.trim()).filter(Boolean);
+        names.forEach(name => {
+          if (name.includes('(게스트)') || name.includes('(Guest)')) {
+            guestNames.push(name.replace(/\(게스트\)|\(Guest\)/gi, '').trim());
+          } else {
+            attendeeNames.push(name);
+          }
+        });
+        continue;
+      }
+      if (section === 'match' && currentMatch) {
+        if (line === 'vs' || line === 'VS') { currentMatch.side = 'B'; continue; }
+        const names = line.split(/[,،、]/).map(n => n.trim()).filter(Boolean);
+        names.forEach(name => {
+          const cleanName = name.replace(/\(게스트\)|\(Guest\)/gi, '').trim();
+          if (currentMatch.side === 'A') currentMatch.teamA.push(cleanName);
+          else currentMatch.teamB.push(cleanName);
+        });
+      }
+    }
+    if (currentMatch) matchList.push(currentMatch);
+    return { attendeeNames, guestNames, matchList };
+  };
+
+  const applyImport = async (date, preview) => {
+    if (!preview) return;
+    const { attendeeNames, guestNames, matchList, guestMap } = preview;
+
+    // 1. 참석자 저장
+    const memberIds = [];
+    attendeeNames.forEach(name => {
+      const found = members.find(m => m.name === name);
+      if (found) memberIds.push(found.id);
+    });
+    const current = attendance[date] || [];
+    const toAdd = memberIds.filter(id => !current.includes(id));
+    for (const id of toAdd) await supabase.from('attendance').insert({ attend_date: date, member_id: id });
+
+    // 2. 게스트 추가
+    const newDateGuests = [...(dateGuests[date] || [])];
+    const guestIdMap = {};
+    guestNames.forEach((name, i) => {
+      // 성별 추정: 멤버 목록에 없으면 남자로 기본
+      const knownMember = members.find(m => m.name === name);
+      const gender = knownMember ? knownMember.gender : 'M';
+      const num = newDateGuests.filter(g => g.gender === gender).length + 1;
+      const guestId = `guest_${date}_${gender}_${Date.now() + i}`;
+      const guestObj = { id: guestId, name: gender === 'M' ? `남게스트${num}` : `여게스트${num}`, gender, isGuest: true, originalName: name };
+      newDateGuests.push(guestObj);
+      guestIdMap[name] = guestId;
+    });
+    setDateGuests(prev => ({ ...prev, [date]: newDateGuests }));
+
+    // 3. 대진 등록
+    const allPlayerMap = {};
+    members.forEach(m => { allPlayerMap[m.name] = { id: m.id, gender: m.gender }; });
+    newDateGuests.forEach(g => { if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender }; });
+
+    for (let i = 0; i < matchList.length; i++) {
+      const match = matchList[i];
+      const [a1name, a2name] = match.teamA;
+      const [b1name, b2name] = match.teamB;
+      const a1 = allPlayerMap[a1name], a2 = allPlayerMap[a2name];
+      const b1 = allPlayerMap[b1name], b2 = allPlayerMap[b2name];
+      if (!a1 || !a2 || !b1 || !b2) continue;
+
+      // 포/백 배정: 혼복이면 여자=포(1번), 남자=백(2번)
+      const teamAPlayers = [a1, a2];
+      const teamBPlayers = [b1, b2];
+      const assignPositions = (players) => {
+        const female = players.find(p => p.gender === 'F');
+        const male = players.find(p => p.gender === 'M');
+        if (female && male) return [female.id, male.id]; // 혼복: 여자=포, 남자=백
+        return [players[0].id, players[1].id]; // 남복/여복: 순서대로
+      };
+      const [ta1, ta2] = assignPositions(teamAPlayers);
+      const [tb1, tb2] = assignPositions(teamBPlayers);
+
+      const allP = [ta1, ta2, tb1, tb2];
+      const allPObjs = allP.map(id => [...members, ...newDateGuests].find(m => m.id === id)).filter(Boolean);
+      const genders = allPObjs.map(p => p.gender);
+      const mCount = genders.filter(g => g === 'M').length;
+      const fCount = genders.filter(g => g === 'F').length;
+      let matchType = 'JB';
+      if (mCount === 4) matchType = 'MB';
+      else if (fCount === 4) matchType = 'FB';
+      else if (mCount === 2 && fCount === 2) matchType = 'MX';
+
+      await supabase.from('matches').insert({
+        id: `${Date.now()}_${i}`,
+        team_a1: ta1, team_a2: ta2, team_b1: tb1, team_b2: tb2,
+        score_a: null, score_b: null,
+        match_date: date, confirmed: false,
+        match_type: matchType, is_draw: false,
+        is_scheduled: true, match_order: i + 1
+      });
+    }
+
+    await loadData();
+    setShowImportModal(false);
+    setImportText('');
+    setImportPreview(null);
+    alert(`완료! 참석자 ${memberIds.length}명, 게스트 ${guestNames.length}명, 대진 ${matchList.length}경기 등록됐어요!`);
+  };
+
+  const handleImportPreview = () => {
+    if (!importText.trim()) return;
+    const parsed = parseImportText(importText);
+    // 멤버 매칭
+    const matched = [], unmatched = [], guests = [];
+    parsed.attendeeNames.forEach(name => {
+      const found = members.find(m => m.name === name);
+      if (found) matched.push(name);
+      else unmatched.push(name);
+    });
+    parsed.guestNames.forEach(name => guests.push(name));
+    setImportPreview({ ...parsed, matched, unmatched });
   };
 
   const addDateGuest = (date, gender) => {
@@ -590,6 +733,11 @@ export default function App() {
 
         {activeTab==='calendar'&&(
           <div className="space-y-4">
+            {/* 대진표 붙여넣기 버튼 */}
+            <button onClick={()=>{if(!checkPassword())return;setShowImportModal(true);}}
+              className="w-full py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
+              📋 대진표 붙여넣기로 한 번에 등록
+            </button>
             {/* 회장 배너 */}
             <div className="bg-white rounded-lg border border-stone-200 px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1329,6 +1477,76 @@ export default function App() {
     </div>
   );
 }
+
+      {/* 대진표 붙여넣기 모달 */}
+      {showImportModal&&(
+        <Modal onClose={()=>{setShowImportModal(false);setImportText('');setImportPreview(null);}} title="대진표 붙여넣기">
+          <div className="space-y-3">
+            {!importPreview ? (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-stone-600 mb-1.5">날짜 선택</label>
+                  <input type="date" value={importDate} onChange={e=>setImportDate(e.target.value)} className="w-full px-3 py-2.5 border border-stone-300 rounded-lg"/>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-stone-600 mb-1.5">대진표 텍스트 붙여넣기</label>
+                  <textarea value={importText} onChange={e=>setImportText(e.target.value)}
+                    placeholder={"참석자, 대진 내용을 붙여넣으세요..."}
+                    className="w-full px-3 py-2.5 border border-stone-300 rounded-lg text-sm h-48 resize-none"/>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>{setShowImportModal(false);setImportText('');}} className="flex-1 px-4 py-2.5 border border-stone-300 text-stone-700 rounded-lg font-medium">취소</button>
+                  <button onClick={handleImportPreview} disabled={!importText.trim()} className="flex-1 px-4 py-2.5 bg-emerald-800 text-white rounded-lg font-medium disabled:bg-stone-300">파싱하기</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-stone-50 rounded-lg p-3 space-y-2 text-sm max-h-64 overflow-y-auto">
+                  <div className="font-bold text-stone-700">📅 {importDate}</div>
+                  <div>
+                    <span className="text-xs font-semibold text-stone-500">✅ 매칭된 멤버 ({importPreview.matched.length})</span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {importPreview.matched.map((n,i)=><span key={i} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{n}</span>)}
+                    </div>
+                  </div>
+                  {importPreview.unmatched.length>0&&(
+                    <div>
+                      <span className="text-xs font-semibold text-orange-500">⚠️ 못 찾은 멤버 ({importPreview.unmatched.length}) - 스킵됩니다</span>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {importPreview.unmatched.map((n,i)=><span key={i} className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{n}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {importPreview.guestNames.length>0&&(
+                    <div>
+                      <span className="text-xs font-semibold text-blue-500">👤 게스트 ({importPreview.guestNames.length})</span>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {importPreview.guestNames.map((n,i)=><span key={i} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{n}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-xs font-semibold text-stone-500">🎾 대진 ({importPreview.matchList.length}경기)</span>
+                    <div className="space-y-1 mt-1">
+                      {importPreview.matchList.map((m,i)=>(
+                        <div key={i} className="text-xs bg-white border border-stone-200 rounded px-2 py-1">
+                          <span className="text-stone-400 mr-1">{i+1}경기</span>
+                          {m.teamA.join('·')} vs {m.teamB.join('·')}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs text-stone-400">위 내용으로 등록됩니다. 확인해주세요!</div>
+                <div className="flex gap-2">
+                  <button onClick={()=>setImportPreview(null)} className="flex-1 px-4 py-2.5 border border-stone-300 text-stone-700 rounded-lg font-medium">← 다시</button>
+                  <button onClick={()=>applyImport(importDate,importPreview)} className="flex-1 px-4 py-2.5 bg-emerald-800 text-white rounded-lg font-semibold">등록하기 🎾</button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
 
 function ComboCard({title,combos,emoji,valueColor,bgColor='bg-emerald-50',titleColor='text-emerald-800'}) {
   return(
