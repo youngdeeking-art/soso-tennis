@@ -139,7 +139,19 @@ export default function App() {
 
   useEffect(() => { loadData(); }, []);
   useEffect(() => {
-    if (selectedDate) { setLocalAttendance(null); setAttendanceDirty(false); setSelectMode(false); setSelectedMatchIds([]); }
+    if (selectedDate) {
+      setLocalAttendance(null);
+      setAttendanceDirty(false);
+      setSelectMode(false);
+      setSelectedMatchIds([]);
+      // 선택한 날짜 게스트 DB에서 로드
+      supabase.from('date_guests').select('*').eq('attend_date', selectedDate).order('guest_order', { ascending: true }).then(({ data }) => {
+        if (data && data.length > 0) {
+          const guests = data.map(g => ({ id: g.id, name: g.name, gender: g.gender, isGuest: true, originalName: g.original_name }));
+          setDateGuests(prev => ({ ...prev, [selectedDate]: guests }));
+        }
+      });
+    }
   }, [selectedDate]);
 
   const loadData = async () => {
