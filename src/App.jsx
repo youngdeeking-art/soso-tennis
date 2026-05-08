@@ -170,6 +170,14 @@ export default function App() {
       const acMap = {};
       (ac || []).forEach(a => { acMap[a.attend_date] = a.confirmed; });
       setAttendanceConfirmed(acMap);
+
+      const { data: dg } = await supabase.from('date_guests').select('*').order('guest_order', { ascending: true });
+      const dgMap = {};
+      (dg || []).forEach(g => {
+        if (!dgMap[g.attend_date]) dgMap[g.attend_date] = [];
+        dgMap[g.attend_date].push({ id: g.id, name: g.name, gender: g.gender, isGuest: true, originalName: g.original_name });
+      });
+      setDateGuests(dgMap);
     } catch (e) {
       alert('데이터 로딩 실패.');
     } finally {
@@ -190,16 +198,21 @@ export default function App() {
     return gender === 'M' ? `남게스트${num}` : `여게스트${num}`;
   };
 
-  const addDateGuest = (date, gender) => {
+  const addDateGuest = async (date, gender) => {
     if (attendanceConfirmed[date]) { if (!checkPassword()) return; }
     const current = dateGuests[date] || [];
     const name = makeGuestName(date, gender, current);
+    const guestOrder = current.length + 1;
     const newGuest = { id: `guest_${date}_${gender}_${Date.now()}`, name, gender, isGuest: true };
+    await supabase.from('date_guests').insert({
+      id: newGuest.id, attend_date: date, name, gender, original_name: null, guest_order: guestOrder
+    });
     setDateGuests(prev => ({ ...prev, [date]: [...(prev[date] || []), newGuest] }));
   };
 
-  const removeDateGuest = (date, guestId) => {
+  const removeDateGuest = async (date, guestId) => {
     if (attendanceConfirmed[date]) { if (!checkPassword()) return; }
+    await supabase.from('date_guests').delete().eq('id', guestId);
     setDateGuests(prev => ({ ...prev, [date]: (prev[date] || []).filter(g => g.id !== guestId) }));
     if (teamA1 === guestId) setTeamA1('');
     if (teamA2 === guestId) setTeamA2('');
@@ -548,6 +561,9 @@ export default function App() {
         name: gender === 'M' ? `남게스트${num}` : `여게스트${num}`,
         gender, isGuest: true, originalName: name
       };
+      await supabase.from('date_guests').insert({
+        id: guestId, attend_date: date, name: guestObj.name, gender, original_name: name, guest_order: newDateGuests.length
+      });
       newDateGuests.push(guestObj);
       guestIdMap[name] = guestId;
     });
