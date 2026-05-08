@@ -333,9 +333,8 @@ export default function App() {
     const guest = guests.find(g => g.id === id);
     if (guest) return guest.name;
     if (id && id.startsWith('guest_')) {
-      const parts = id.split('_');
-      // guest_{date}_{gender}_{timestamp} 형식
-      const gender = parts[3] || parts[2];
+      const m = id.match(/guest_[\d-]+_([MF])_/);
+      const gender = m ? m[1] : 'M';
       return gender === 'M' ? '남게스트' : '여게스트';
     }
     return members.find(m => m.id === id)?.name || '?';
@@ -345,8 +344,8 @@ export default function App() {
   const normalizeId = (id) => {
     if (!id) return id;
     if (id.startsWith('guest_')) {
-      const parts = id.split('_');
-      const gender = parts[3] || parts[2];
+      const m = id.match(/guest_[\d-]+_([MF])_/);
+      const gender = m ? m[1] : 'M';
       return gender === 'M' ? '__GUEST_M__' : '__GUEST_F__';
     }
     return id;
