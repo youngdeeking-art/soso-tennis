@@ -526,18 +526,23 @@ export default function App() {
     const toAdd = memberIds.filter(id => !current.includes(id));
     for (const id of toAdd) await supabase.from('attendance').insert({ attend_date: date, member_id: id });
 
-    // 2. 게스트 추가 (남/여 구분, 순번 자동)
+    // 2. 게스트 추가 (이미 있으면 재사용, 없으면 새로 추가)
     const newDateGuests = [...(dateGuests[date] || [])];
     const guestIdMap = {};
-    let maleCount = newDateGuests.filter(g => g.gender === 'M').length;
-    let femaleCount = newDateGuests.filter(g => g.gender === 'F').length;
 
-    guestNames.forEach((name, i) => {
-      // 멤버 목록에서 성별 추정, 없으면 남자
+    // 먼저 guestNames 중복 제거
+    const uniqueGuestNames = [...new Set(guestNames)];
+
+    uniqueGuestNames.forEach((name, i) => {
+      // 이미 같은 originalName으로 추가된 게스트 있으면 재사용
+      const existing = newDateGuests.find(g => g.originalName === name);
+      if (existing) {
+        guestIdMap[name] = existing.id;
+        return;
+      }
       const knownMember = members.find(m => m.name === name);
       const gender = knownMember ? knownMember.gender : 'M';
-      if (gender === 'M') { maleCount++; } else { femaleCount++; }
-      const num = gender === 'M' ? maleCount : femaleCount;
+      const num = newDateGuests.filter(g => g.gender === gender).length + 1;
       const guestId = `guest_${date}_${gender}_${Date.now() + i}`;
       const guestObj = {
         id: guestId,
