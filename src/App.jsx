@@ -215,17 +215,21 @@ export default function App() {
     const current = dateGuests[date] || [];
     const name = makeGuestName(date, gender, current);
     const guestOrder = current.length + 1;
-    const newGuest = { id: `guest_${date}_${gender}_${Date.now()}`, name, gender, isGuest: true };
+    const id = `guest_${date}_${gender}_${Date.now()}`;
     await supabase.from('date_guests').insert({
-      id: newGuest.id, attend_date: date, name, gender, original_name: null, guest_order: guestOrder
+      id, attend_date: date, name, gender, original_name: null, guest_order: guestOrder
     });
-    setDateGuests(prev => ({ ...prev, [date]: [...(prev[date] || []), newGuest] }));
+    // DB에서 다시 불러오기
+    const { data } = await supabase.from('date_guests').select('*').eq('attend_date', date).order('guest_order', { ascending: true });
+    if (data) setDateGuests(prev => ({ ...prev, [date]: data.map(g => ({ id: g.id, name: g.name, gender: g.gender, isGuest: true, originalName: g.original_name })) }));
   };
 
   const removeDateGuest = async (date, guestId) => {
     if (attendanceConfirmed[date]) { if (!checkPassword()) return; }
     await supabase.from('date_guests').delete().eq('id', guestId);
-    setDateGuests(prev => ({ ...prev, [date]: (prev[date] || []).filter(g => g.id !== guestId) }));
+    // DB에서 다시 불러오기
+    const { data } = await supabase.from('date_guests').select('*').eq('attend_date', date).order('guest_order', { ascending: true });
+    if (data) setDateGuests(prev => ({ ...prev, [date]: data.map(g => ({ id: g.id, name: g.name, gender: g.gender, isGuest: true, originalName: g.original_name })) }));
     if (teamA1 === guestId) setTeamA1('');
     if (teamA2 === guestId) setTeamA2('');
     if (teamB1 === guestId) setTeamB1('');
