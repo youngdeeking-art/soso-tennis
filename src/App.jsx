@@ -209,14 +209,17 @@ export default function App() {
     const id = `guest_${date}_${gender}_${Date.now()}`;
     const guestOrder = current.length + 1;
 
-    const { error } = await supabase.from('date_guests').insert({
+    alert(`[DEBUG] 추가 시도: ${name}, date=${date}`);
+
+    const { data, error } = await supabase.from('date_guests').insert({
       id, attend_date: date, name, gender, original_name: null, guest_order: guestOrder
-    });
+    }).select();
 
     if (error) {
-      alert('게스트 추가 실패: ' + error.message);
+      alert('[DEBUG] 에러: ' + JSON.stringify(error));
       return;
     }
+    alert('[DEBUG] 성공: ' + JSON.stringify(data));
     await loadGuests();
   };
 
