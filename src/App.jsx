@@ -120,6 +120,14 @@ export default function App() {
   const [importDate, setImportDate] = useState(new Date().toISOString().split('T')[0]);
   const [importPreview, setImportPreview] = useState(null);
 
+  // 자동 대진 생성
+  const [showAutoModal, setShowAutoModal] = useState(false);
+  const [autoDate, setAutoDate] = useState(new Date().toISOString().split('T')[0]);
+  const [autoRatioMB, setAutoRatioMB] = useState(2); // 남복
+  const [autoRatioMX, setAutoRatioMX] = useState(4); // 혼복
+  const [autoRatioFB, setAutoRatioFB] = useState(2); // 여복
+  const [autoPreview, setAutoPreview] = useState(null);
+
   const today = new Date().toISOString().split('T')[0];
   const [calendarMode, setCalendarMode] = useState('week');
   const [currentWeekBase, setCurrentWeekBase] = useState(new Date());
@@ -460,7 +468,149 @@ export default function App() {
     await loadAll();
   };
 
-  // 대진표 파싱
+  // ───────────────────────────────
+  // 자동 대진 생성
+  // ───────────────────────────────
+  const generateAutoSchedule = () => {
+    const players = getAvailablePlayers(autoDate);
+    if (players.length < 4) { alert('참석자가 4명 이상이어야 해요!'); return; }
+
+    const totalGames = 8;
+    const ratioTotal = autoRatioMB + autoRatioMX + autoRatioFB;
+    const mbCount = Math.round(totalGames * autoRatioMB / ratioTotal);
+    const fbCount = Math.round(totalGames * autoRatioFB / ratioTotal);
+    const mxCount = totalGames - mbCount - fbCount;
+
+    const males = players.filter(p => p.gender === 'M');
+    const females = players.filter(p => p.gender === 'F');
+
+    // 승률 기반 점수 (0~100, 없으면 50)
+    const getScore = (id) => {
+      const stat = allStats.find(s => s.id === id);
+      if (!stat || stat.rankedTotal === 0) return 50;
+      return stat.winRate;
+    };
+
+    // 파트너 조합 횟수 추적 (당일)
+    const partnerCount = {};
+    const getPartnerKey = (a, b) => [a, b].sort().join('|');
+    const addPartner = (a, b) => { const k = getPartnerKey(a, b); partnerCount[k] = (partnerCount[k] || 0) + 1; };
+    const getPartnerScore = (a, b) => partnerCount[getPartnerKey(a, b)] || 0;
+
+    // 연속 출전 횟수 추적
+    const consecutivePlay = {};
+    const lastPlayed = {};
+    const addPlay = (ids, gameIdx) => {
+      ids.forEach(id => {
+        if (lastPlayed[id] === gameIdx - 1) consecutivePlay[id] = (consecutivePlay[id] || 0) + 1;
+        else consecutivePlay[id] = 0;
+        lastPlayed[id] = gameIdx;
+      });
+    };
+    const getConsecutive = (id, gameIdx) => lastPlayed[id] === gameIdx - 1 ? (consecutivePlay[id] || 0) : 0;
+
+    // 팀 밸런스 점수 계산 (낮을수록 밸런스 좋음)
+    const teamBalanceScore = (a1, a2, b1, b2) => {
+      const aScore = (getScore(a1.id) + getScore(a2.id)) / 2;
+      const bScore = (getScore(b1.id) + getScore(b2.id)) / 2;
+      return Math.abs(aScore - bScore);
+    };
+
+    const games = [];
+    const gameTypes = [];
+
+    // 경기 타입 리스트 생성
+    for (let i = 0; i < mbCount; i++) gameTypes.push('MB');
+    for (let i = 0; i < fbCount; i++) gameTypes.push('FB');
+    for (let i = 0; i < mxCount; i++) gameTypes.push('MX');
+
+    // 셔플
+    for (let i = gameTypes.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [gameTypes[i], gameTypes[j]] = [gameTypes[j], gameTypes[i]];
+    }
+
+    for (let gi = 0; gi < gameTypes.length; gi++) {
+      const type = gameTypes[gi];
+      let pool = [];
+
+      if (type === 'MB') pool = males;
+      else if (type === 'FB') pool = females;
+      else pool = players; // MX: 남+여 각 2명
+
+      if (type === 'MB' && males.length < 4) continue;
+      if (type === 'FB' && females.length < 4) continue;
+      if (type === 'MX' && (males.length < 2 || females.length < 2)) continue;
+
+      let bestGame = null, bestScore = Infinity;
+
+      // 후보 조합 탐색 (랜덤 샘플링으로 최적 찾기)
+      const tries = 50;
+      for (let t = 0; t < tries; t++) {
+        let four;
+        if (type === 'MX') {
+          const shuffledM = [...males].sort(() => Math.random() - 0.5);
+          const shuffledF = [...females].sort(() => Math.random() - 0.5);
+          four = [shuffledM[0], shuffledM[1], shuffledF[0], shuffledF[1]];
+        } else {
+          const shuffled = [...pool].sort(() => Math.random() - 0.5);
+          four = shuffled.slice(0, 4);
+        }
+
+        // 혼복: 여자=포, 남자=백
+        let a1, a2, b1, b2;
+        if (type === 'MX') {
+          const [m1, m2, f1, f2] = four;
+          a1 = f1; a2 = m1; b1 = f2; b2 = m2; // 여자=포(1번), 남자=백(2번)
+        } else {
+          [a1, a2, b1, b2] = four;
+        }
+
+        // 점수 계산
+        const balance = teamBalanceScore(a1, a2, b1, b2);
+        const partnerPenalty = getPartnerScore(a1.id, a2.id) * 10 + getPartnerScore(b1.id, b2.id) * 10;
+        const consecPenalty = [a1,a2,b1,b2].reduce((acc, p) => acc + getConsecutive(p.id, gi) * 5, 0);
+        const totalScore = balance + partnerPenalty + consecPenalty;
+
+        if (totalScore < bestScore) {
+          bestScore = totalScore;
+          bestGame = { a1, a2, b1, b2, type };
+        }
+      }
+
+      if (bestGame) {
+        games.push(bestGame);
+        addPartner(bestGame.a1.id, bestGame.a2.id);
+        addPartner(bestGame.b1.id, bestGame.b2.id);
+        addPlay([bestGame.a1.id, bestGame.a2.id, bestGame.b1.id, bestGame.b2.id], gi);
+      }
+    }
+
+    setAutoPreview(games);
+  };
+
+  const applyAutoSchedule = async () => {
+    if (!autoPreview || autoPreview.length === 0) return;
+    const baseOrder = matches.filter(m => m.date === autoDate).length;
+    for (let i = 0; i < autoPreview.length; i++) {
+      const g = autoPreview[i];
+      await supabase.from('matches').insert({
+        id: `${Date.now()}_auto_${i}`,
+        team_a1: g.a1.id, team_a2: g.a2.id, team_b1: g.b1.id, team_b2: g.b2.id,
+        score_a: null, score_b: null, match_date: autoDate,
+        confirmed: false, match_type: g.type, is_draw: false,
+        is_scheduled: true, match_order: baseOrder + i + 1
+      });
+    }
+    await loadAll();
+    setShowAutoModal(false);
+    setAutoPreview(null);
+    alert(`${autoPreview.length}경기 대진이 등록됐어요!`);
+  };
+
+  // ───────────────────────────────
+  // 대진표 파싱 (개선)
+  // ───────────────────────────────
   const parseImportText = (text) => {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const attendeeNames = [], guestNames = [], matchList = [];
@@ -494,21 +644,61 @@ export default function App() {
     return { attendeeNames, guestNames, matchList };
   };
 
+  // 이름 유사도 매칭 (공백/괄호 제거 후 비교)
+  const normalizeName = (name) => name.replace(/\s|\(.*?\)/g, '').trim();
+
+  const findMemberByName = (name) => {
+    const normalized = normalizeName(name);
+    // 정확히 일치
+    let found = members.find(m => m.name === name);
+    if (found) return found;
+    // 공백/괄호 제거 후 일치
+    found = members.find(m => normalizeName(m.name) === normalized);
+    if (found) return found;
+    // 포함 관계
+    found = members.find(m => m.name.includes(normalized) || normalized.includes(m.name));
+    return found || null;
+  };
+
   const handleImportPreview = () => {
     if (!importText.trim()) return;
     const parsed = parseImportText(importText);
-    const matched = [], unmatched = [];
-    parsed.attendeeNames.forEach(name => members.find(m => m.name === name) ? matched.push(name) : unmatched.push(name));
+    const matched = [], unmatched = [], fuzzyMatched = [];
+
+    parsed.attendeeNames.forEach(name => {
+      const exact = members.find(m => m.name === name);
+      if (exact) { matched.push({ input: name, member: exact }); return; }
+      const fuzzy = findMemberByName(name);
+      if (fuzzy) { fuzzyMatched.push({ input: name, member: fuzzy }); return; }
+      unmatched.push(name);
+    });
+
+    // 경기에서 등장하는 이름도 체크
+    const matchNames = new Set();
+    parsed.matchList.forEach(m => { [...m.teamA, ...m.teamB].forEach(n => matchNames.add(n)); });
+    const allKnownNames = new Set([
+      ...matched.map(x => x.input),
+      ...fuzzyMatched.map(x => x.input),
+      ...parsed.guestNames
+    ]);
+    const unknownInMatches = [...matchNames].filter(n => !allKnownNames.has(n) && !members.find(m => m.name === n) && !findMemberByName(n));
+
     const existingScheduled = matches.filter(m => m.date === importDate && m.isScheduled);
-    setImportPreview({ ...parsed, matched, unmatched, hasDuplicate: existingScheduled.length > 0, existingCount: existingScheduled.length });
+    setImportPreview({
+      ...parsed,
+      matched, fuzzyMatched, unmatched, unknownInMatches,
+      hasDuplicate: existingScheduled.length > 0,
+      existingCount: existingScheduled.length
+    });
   };
 
   const applyImport = async (date, preview) => {
     if (!preview) return;
-    const { attendeeNames, guestNames, matchList } = preview;
+    const { matched, fuzzyMatched, guestNames, matchList } = preview;
 
-    // 1. 참석자 저장
-    const memberIds = attendeeNames.map(name => members.find(m => m.name === name)?.id).filter(Boolean);
+    // 1. 참석자 저장 (정확 매칭 + 유사 매칭)
+    const allMatchedMembers = [...(matched || []).map(x => x.member), ...(fuzzyMatched || []).map(x => x.member)];
+    const memberIds = [...new Set(allMatchedMembers.map(m => m.id))];
     const current = attendance[date] || [];
     for (const id of memberIds.filter(id => !current.includes(id))) await supabase.from('attendance').insert({ attend_date: date, member_id: id });
 
@@ -534,16 +724,20 @@ export default function App() {
       if (!error) guestIdMap[name] = guestId;
     }
 
-    // 3. 전체 플레이어 맵
+    // 3. 전체 플레이어 맵 (정확매칭 + 유사매칭 + 게스트)
     await loadGuests();
     const freshGuests = dateGuests[date] || [];
     const allPlayerMap = {};
+    // 정확 이름
     members.forEach(m => { allPlayerMap[m.name] = { id: m.id, gender: m.gender }; });
+    // 유사 매칭 (입력된 이름 → 실제 멤버)
+    if (matched) matched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
+    if (fuzzyMatched) fuzzyMatched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
+    // 게스트
     freshGuests.forEach(g => {
       if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender };
       allPlayerMap[g.name] = { id: g.id, gender: g.gender };
     });
-    // guestIdMap에서 추가된 것도 반영
     uniqueGuestNames.forEach(name => {
       if (guestIdMap[name]) {
         const gender = getGuestGender(guestIdMap[name]);
@@ -740,9 +934,14 @@ export default function App() {
 
         {activeTab==='calendar'&&(
           <div className="space-y-4">
-            <button onClick={()=>{if(!checkPassword())return;setShowImportModal(true);}} className="w-full py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
-              📋 대진표 붙여넣기로 한 번에 등록
-            </button>
+            <div className="flex gap-2">
+              <button onClick={()=>{if(!checkPassword())return;setShowImportModal(true);}} className="flex-1 py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
+                📋 대진표 붙여넣기
+              </button>
+              <button onClick={()=>{if(!checkPassword())return;setAutoDate(selectedDate||new Date().toISOString().split('T')[0]);setAutoPreview(null);setShowAutoModal(true);}} className="flex-1 py-3 bg-gradient-to-r from-blue-700 to-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
+                🎲 자동 대진 생성
+              </button>
+            </div>
 
             <div className="bg-white rounded-lg border border-stone-200 px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1228,9 +1427,11 @@ export default function App() {
                 {importPreview.hasDuplicate&&<div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-700">⚠️ 이 날짜에 이미 대진 {importPreview.existingCount}개가 있어요. 추가로 등록됩니다.</div>}
                 <div className="bg-stone-50 rounded-lg p-3 space-y-2 text-sm max-h-64 overflow-y-auto">
                   <div className="font-bold text-stone-700">📅 {importDate}</div>
-                  <div><span className="text-xs font-semibold text-stone-500">✅ 매칭된 멤버 ({importPreview.matched.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.matched.map((n,i)=><span key={i} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>
-                  {importPreview.unmatched.length>0&&<div><span className="text-xs font-semibold text-orange-500">⚠️ 못 찾은 멤버 - 스킵</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.unmatched.map((n,i)=><span key={i} className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>}
-                  {importPreview.guestNames.length>0&&<div><span className="text-xs font-semibold text-blue-500">👤 게스트 ({importPreview.guestNames.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.guestNames.map((n,i)=><span key={i} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>}
+                  {importPreview.matched?.length>0&&<div><span className="text-xs font-semibold text-emerald-600">✅ 정확 매칭 ({importPreview.matched.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.matched.map((x,i)=><span key={i} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{x.input}</span>)}</div></div>}
+                  {importPreview.fuzzyMatched?.length>0&&<div><span className="text-xs font-semibold text-yellow-600">🔍 유사 매칭 ({importPreview.fuzzyMatched.length}) - 확인 필요</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.fuzzyMatched.map((x,i)=><span key={i} className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">{x.input} → {x.member.name}</span>)}</div></div>}
+                  {importPreview.unmatched?.length>0&&<div><span className="text-xs font-semibold text-red-500">❌ 못 찾은 멤버 - 스킵 ({importPreview.unmatched.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.unmatched.map((n,i)=><span key={i} className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>}
+                  {importPreview.unknownInMatches?.length>0&&<div><span className="text-xs font-semibold text-orange-500">⚠️ 경기에 있는데 참석자 미등록: {importPreview.unknownInMatches.join(', ')}</span></div>}
+                  {importPreview.guestNames?.length>0&&<div><span className="text-xs font-semibold text-blue-500">👤 게스트 ({importPreview.guestNames.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.guestNames.map((n,i)=><span key={i} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>}
                   <div><span className="text-xs font-semibold text-stone-500">🎾 대진 ({importPreview.matchList.length}경기)</span><div className="space-y-1 mt-1">{importPreview.matchList.map((m,i)=><div key={i} className="text-xs bg-white border border-stone-200 rounded px-2 py-1"><span className="text-stone-400 mr-1">{i+1}경기</span>{m.teamA.join('·')} vs {m.teamB.join('·')}</div>)}</div></div>
                 </div>
                 <div className="flex gap-2">
@@ -1239,6 +1440,55 @@ export default function App() {
                 </div>
               </>
             )}
+          </div>
+        </Modal>
+      )}
+
+      {showAutoModal&&(
+        <Modal onClose={()=>{setShowAutoModal(false);setAutoPreview(null);}} title="🎲 자동 대진 생성">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-stone-600 mb-1.5">날짜</label>
+              <input type="date" value={autoDate} onChange={e=>{setAutoDate(e.target.value);setAutoPreview(null);}} className="w-full px-3 py-2.5 border border-stone-300 rounded-lg"/>
+            </div>
+            <div className="bg-stone-50 rounded-lg p-3">
+              <div className="text-xs font-semibold text-stone-600 mb-2">참석자: {getAvailablePlayers(autoDate).length}명 (남 {getAvailablePlayers(autoDate).filter(p=>p.gender==='M').length} / 여 {getAvailablePlayers(autoDate).filter(p=>p.gender==='F').length})</div>
+              <div className="text-xs text-stone-400">※ 참석자 체크 후 사용하세요</div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-stone-600 mb-2">경기 비율 (총 8경기)</div>
+              <div className="space-y-2">
+                {[['남복 🎾', autoRatioMB, setAutoRatioMB, 'blue'], ['혼복 🎾', autoRatioMX, setAutoRatioMX, 'purple'], ['여복 🎾', autoRatioFB, setAutoRatioFB, 'pink']].map(([label, val, setter, color])=>(
+                  <div key={label} className="flex items-center gap-3">
+                    <span className="text-sm w-12 flex-shrink-0">{label}</span>
+                    <input type="range" min="0" max="8" value={val} onChange={e=>{setter(parseInt(e.target.value));setAutoPreview(null);}} className="flex-1"/>
+                    <span className={`text-sm font-bold w-6 text-center text-${color}-600`}>{val}</span>
+                  </div>
+                ))}
+                <div className="text-xs text-stone-400 text-right">합계: {autoRatioMB+autoRatioMX+autoRatioFB}경기 {autoRatioMB+autoRatioMX+autoRatioFB!==8&&<span className="text-orange-500">(8경기 권장)</span>}</div>
+              </div>
+            </div>
+            {!autoPreview?(
+              <button onClick={generateAutoSchedule} className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2">🎲 대진 생성하기</button>
+            ):(
+              <div className="space-y-3">
+                <div className="text-xs font-semibold text-stone-600">생성된 대진 ({autoPreview.length}경기)</div>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {autoPreview.map((g,i)=>(
+                    <div key={i} className={`text-xs rounded px-3 py-2 flex items-center gap-2 ${getMatchTypeLabel(g.type).color}`}>
+                      <span className="font-bold flex-shrink-0">{i+1}</span>
+                      <span className="flex-shrink-0">{getMatchTypeLabel(g.type).label}</span>
+                      <span className="flex-1 truncate">{g.a1.name}·{g.a2.name} vs {g.b1.name}·{g.b2.name}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>{setAutoPreview(null);}} className="flex-1 py-2.5 border border-stone-300 text-stone-700 rounded-lg text-sm font-medium">다시 생성</button>
+                  <button onClick={applyAutoSchedule} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold">등록하기 ✅</button>
+                </div>
+              </div>
+            )}
+            <button onClick={()=>{setShowAutoModal(false);setAutoPreview(null);}} className="w-full py-2.5 border border-stone-200 text-stone-500 rounded-lg text-sm">취소</button>
           </div>
         </Modal>
       )}
