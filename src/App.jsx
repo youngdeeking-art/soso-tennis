@@ -137,11 +137,14 @@ export default function App() {
 
   // 자동 대진 생성
   const [showAutoModal, setShowAutoModal] = useState(false);
+  const [showDayResultModal, setShowDayResultModal] = useState(false);
+  const [dayResultDate, setDayResultDate] = useState(null);
   const [autoDate, setAutoDate] = useState(new Date().toISOString().split('T')[0]);
   const [autoRatioMB, setAutoRatioMB] = useState(2); // 남복
   const [autoRatioMX, setAutoRatioMX] = useState(4); // 혼복
   const [autoRatioFB, setAutoRatioFB] = useState(2); // 여복
   const [autoPreview, setAutoPreview] = useState(null);
+  const [swapSelected, setSwapSelected] = useState([]); // 교체할 선수 2명 선택
 
   const today = new Date().toISOString().split('T')[0];
   const [calendarMode, setCalendarMode] = useState('week');
@@ -506,118 +509,191 @@ export default function App() {
   // ───────────────────────────────
   // 자동 대진 생성
   // ───────────────────────────────
+  // 특정 날짜의 개인별 통계
+  const getDayStats = (date) => {
+    const dayMatches = matches.filter(m => m.date === date && !m.isScheduled && m.scoreA !== null);
+    const attendees = attendance[date] || [];
+    const dayGuests = dateGuests[date] || [];
+    const dayPlayers = [
+      ...members.filter(m => attendees.includes(m.id)),
+      ...dayGuests
+    ];
+
+    return dayPlayers.map(player => {
+      let wins = 0, losses = 0, draws = 0, gamesWon = 0, gamesLost = 0;
+      dayMatches.forEach(m => {
+        const inA = m.teamA1 === player.id || m.teamA2 === player.id;
+        const inB = m.teamB1 === player.id || m.teamB2 === player.id;
+        if (!inA && !inB) return;
+        const draw = m.isDraw || m.scoreA === m.scoreB;
+        const won = !draw && (inA ? m.scoreA > m.scoreB : m.scoreB > m.scoreA);
+        if (draw) { draws++; gamesWon += inA ? m.scoreA : m.scoreB; gamesLost += inA ? m.scoreB : m.scoreA; }
+        else if (won) { wins++; gamesWon += inA ? m.scoreA : m.scoreB; gamesLost += inA ? m.scoreB : m.scoreA; }
+        else { losses++; gamesWon += inA ? m.scoreA : m.scoreB; gamesLost += inA ? m.scoreB : m.scoreA; }
+      });
+      const total = wins + losses + draws;
+      const winRate = total > 0 ? ((wins + draws * 0.5) / total * 100) : 0;
+      return { ...player, wins, losses, draws, total, winRate, gamesWon, gamesLost };
+    }).filter(p => p.total > 0)
+      .sort((a, b) => b.winRate - a.winRate || b.gamesWon - a.gamesWon || a.gamesLost - b.gamesLost);
+  };
+
+  // 당일 파트너 통계
+  const getDayPartnerStats = (date) => {
+    const dayMatches = matches.filter(m => m.date === date && !m.isScheduled && m.scoreA !== null);
+    const combos = {};
+    dayMatches.forEach(m => {
+      [
+        { pair: [m.teamA1, m.teamA2].sort(), won: !m.isDraw && m.scoreA > m.scoreB, draw: m.isDraw || m.scoreA === m.scoreB },
+        { pair: [m.teamB1, m.teamB2].sort(), won: !m.isDraw && m.scoreB > m.scoreA, draw: m.isDraw || m.scoreA === m.scoreB }
+      ].forEach(({ pair, won, draw }) => {
+        const key = pair.join('|');
+        if (!combos[key]) combos[key] = { ids: pair, wins: 0, losses: 0, draws: 0 };
+        if (draw) combos[key].draws++; else if (won) combos[key].wins++; else combos[key].losses++;
+      });
+    });
+    return Object.values(combos).map(c => ({
+      ...c, total: c.wins + c.losses + c.draws,
+      winRate: c.wins + c.losses + c.draws > 0 ? ((c.wins + c.draws * 0.5) / (c.wins + c.losses + c.draws) * 100) : 0,
+      name1: getMemberName(c.ids[0], date), name2: getMemberName(c.ids[1], date)
+    })).filter(c => c.total >= 1).sort((a, b) => b.winRate - a.winRate || b.wins - a.wins);
+  };
+
   const generateAutoSchedule = () => {
     const players = getAvailablePlayers(autoDate);
     if (players.length < 4) { alert('참석자가 4명 이상이어야 해요!'); return; }
 
-    const totalGames = 8;
-    const ratioTotal = autoRatioMB + autoRatioMX + autoRatioFB;
-    const mbCount = Math.round(totalGames * autoRatioMB / ratioTotal);
-    const fbCount = Math.round(totalGames * autoRatioFB / ratioTotal);
-    const mxCount = totalGames - mbCount - fbCount;
-
+    const totalGames = autoRatioMB + autoRatioMX + autoRatioFB;
     const males = players.filter(p => p.gender === 'M');
     const females = players.filter(p => p.gender === 'F');
 
-    // 승률 기반 점수 (0~100, 없으면 50)
+    // 승률 점수 (없으면 50)
     const getScore = (id) => {
       const stat = allStats.find(s => s.id === id);
-      if (!stat || stat.rankedTotal === 0) return 50;
-      return stat.winRate;
+      return (!stat || stat.rankedTotal === 0) ? 50 : stat.winRate;
     };
 
-    // 파트너 조합 횟수 추적 (당일)
-    const partnerCount = {};
-    const getPartnerKey = (a, b) => [a, b].sort().join('|');
-    const addPartner = (a, b) => { const k = getPartnerKey(a, b); partnerCount[k] = (partnerCount[k] || 0) + 1; };
-    const getPartnerScore = (a, b) => partnerCount[getPartnerKey(a, b)] || 0;
+    // 헬퍼
+    const pairKey = (a, b) => [a, b].sort().join('|');
+    const matchKey = (ids) => [...ids].sort().join('|');
 
-    // 연속 출전 횟수 추적
-    const consecutivePlay = {};
-    const lastPlayed = {};
-    const addPlay = (ids, gameIdx) => {
+    // 추적
+    const usedMatches = new Set(); // 같은 4명 조합
+    const partnerCount = {};       // 파트너 횟수
+    const playCount = {};          // 총 출전 횟수
+    const lastPlayedGame = {};     // 마지막 출전 경기 인덱스
+    const consecCount = {};        // 연속 출전 수
+
+    players.forEach(p => { playCount[p.id] = 0; lastPlayedGame[p.id] = -99; consecCount[p.id] = 0; });
+
+    const updateTracking = (a1, a2, b1, b2, gi) => {
+      const ids = [a1.id, a2.id, b1.id, b2.id];
+      usedMatches.add(matchKey(ids));
+      const pk1 = pairKey(a1.id, a2.id), pk2 = pairKey(b1.id, b2.id);
+      partnerCount[pk1] = (partnerCount[pk1]||0) + 1;
+      partnerCount[pk2] = (partnerCount[pk2]||0) + 1;
       ids.forEach(id => {
-        if (lastPlayed[id] === gameIdx - 1) consecutivePlay[id] = (consecutivePlay[id] || 0) + 1;
-        else consecutivePlay[id] = 0;
-        lastPlayed[id] = gameIdx;
+        consecCount[id] = lastPlayedGame[id] === gi - 1 ? consecCount[id] + 1 : 0;
+        lastPlayedGame[id] = gi;
+        playCount[id]++;
       });
     };
-    const getConsecutive = (id, gameIdx) => lastPlayed[id] === gameIdx - 1 ? (consecutivePlay[id] || 0) : 0;
 
-    // 팀 밸런스 점수 계산 (낮을수록 밸런스 좋음)
-    const teamBalanceScore = (a1, a2, b1, b2) => {
-      const aScore = (getScore(a1.id) + getScore(a2.id)) / 2;
-      const bScore = (getScore(b1.id) + getScore(b2.id)) / 2;
-      return Math.abs(aScore - bScore);
+    // 조합 점수 계산 (낮을수록 좋음)
+    const scoreCombo = (a1, a2, b1, b2, gi, strictNoDup) => {
+      const ids = [a1.id, a2.id, b1.id, b2.id];
+      const mk = matchKey(ids);
+      // 같은 4명 조합 이미 있으면 strictNoDup모드에서 무한대
+      if (strictNoDup && usedMatches.has(mk)) return Infinity;
+
+      let score = 0;
+
+      // 팀 밸런스 (낮을수록 좋음 → 0 가중치 높게)
+      const aAvg = (getScore(a1.id) + getScore(a2.id)) / 2;
+      const bAvg = (getScore(b1.id) + getScore(b2.id)) / 2;
+      score += Math.abs(aAvg - bAvg) * 2;
+
+      // 파트너 중복 페널티
+      score += (partnerCount[pairKey(a1.id, a2.id)]||0) * 15;
+      score += (partnerCount[pairKey(b1.id, b2.id)]||0) * 15;
+
+      // 연속 출전 페널티 (3경기 연속이면 매우 높게)
+      ids.forEach(id => {
+        const consec = lastPlayedGame[id] === gi - 1 ? consecCount[id] + 1 : 0;
+        if (consec >= 3) score += 100; // 3연속 강력 억제
+        else if (consec === 2) score += 30;
+        else if (consec === 1) score += 5;
+      });
+
+      // 출전 횟수 균형
+      const maxPlay = Math.max(...ids.map(id => playCount[id]));
+      const minPlayAll = Math.min(...players.map(p => playCount[p.id]));
+      score += (maxPlay - minPlayAll) * 3;
+
+      return score;
     };
 
-    const games = [];
+    // 모든 가능한 조합 생성
+    const getCandidates = (type) => {
+      const candidates = [];
+      if (type === 'MB') {
+        if (males.length < 4) return [];
+        for (let i=0;i<males.length;i++) for (let j=i+1;j<males.length;j++)
+          for (let k=0;k<males.length;k++) { if(k===i||k===j) continue;
+            for (let l=k+1;l<males.length;l++) { if(l===i||l===j) continue;
+              candidates.push({ a1:males[i], a2:males[j], b1:males[k], b2:males[l] });
+            }}
+      } else if (type === 'FB') {
+        if (females.length < 4) return [];
+        for (let i=0;i<females.length;i++) for (let j=i+1;j<females.length;j++)
+          for (let k=0;k<females.length;k++) { if(k===i||k===j) continue;
+            for (let l=k+1;l<females.length;l++) { if(l===i||l===j) continue;
+              candidates.push({ a1:females[i], a2:females[j], b1:females[k], b2:females[l] });
+            }}
+      } else { // MX: 여자=포, 남자=백
+        if (males.length < 2 || females.length < 2) return [];
+        for (let fi=0;fi<females.length;fi++) for (let fj=0;fj<females.length;fj++) { if(fi===fj) continue;
+          for (let mi=0;mi<males.length;mi++) for (let mj=0;mj<males.length;mj++) { if(mi===mj) continue;
+            candidates.push({ a1:females[fi], a2:males[mi], b1:females[fj], b2:males[mj] });
+          }}
+      }
+      return candidates;
+    };
+
+    // 경기 타입 순서 생성
     const gameTypes = [];
+    for (let i=0;i<autoRatioMB;i++) gameTypes.push('MB');
+    for (let i=0;i<autoRatioFB;i++) gameTypes.push('FB');
+    for (let i=0;i<autoRatioMX;i++) gameTypes.push('MX');
+    // 타입 섞기
+    for (let i=gameTypes.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1)); [gameTypes[i],gameTypes[j]]=[gameTypes[j],gameTypes[i]]; }
 
-    // 경기 타입 리스트 생성
-    for (let i = 0; i < mbCount; i++) gameTypes.push('MB');
-    for (let i = 0; i < fbCount; i++) gameTypes.push('FB');
-    for (let i = 0; i < mxCount; i++) gameTypes.push('MX');
-
-    // 셔플
-    for (let i = gameTypes.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [gameTypes[i], gameTypes[j]] = [gameTypes[j], gameTypes[i]];
-    }
+    const games = [];
 
     for (let gi = 0; gi < gameTypes.length; gi++) {
       const type = gameTypes[gi];
-      let pool = [];
+      const candidates = getCandidates(type);
+      if (candidates.length === 0) continue;
 
-      if (type === 'MB') pool = males;
-      else if (type === 'FB') pool = females;
-      else pool = players; // MX: 남+여 각 2명
+      // 1차: 중복 없이 최적 선택
+      let best = null, bestScore = Infinity;
+      for (const c of candidates) {
+        const s = scoreCombo(c.a1, c.a2, c.b1, c.b2, gi, true);
+        if (s < bestScore) { bestScore = s; best = c; }
+      }
 
-      if (type === 'MB' && males.length < 4) continue;
-      if (type === 'FB' && females.length < 4) continue;
-      if (type === 'MX' && (males.length < 2 || females.length < 2)) continue;
-
-      let bestGame = null, bestScore = Infinity;
-
-      // 후보 조합 탐색 (랜덤 샘플링으로 최적 찾기)
-      const tries = 50;
-      for (let t = 0; t < tries; t++) {
-        let four;
-        if (type === 'MX') {
-          const shuffledM = [...males].sort(() => Math.random() - 0.5);
-          const shuffledF = [...females].sort(() => Math.random() - 0.5);
-          four = [shuffledM[0], shuffledM[1], shuffledF[0], shuffledF[1]];
-        } else {
-          const shuffled = [...pool].sort(() => Math.random() - 0.5);
-          four = shuffled.slice(0, 4);
-        }
-
-        // 혼복: 여자=포, 남자=백
-        let a1, a2, b1, b2;
-        if (type === 'MX') {
-          const [m1, m2, f1, f2] = four;
-          a1 = f1; a2 = m1; b1 = f2; b2 = m2; // 여자=포(1번), 남자=백(2번)
-        } else {
-          [a1, a2, b1, b2] = four;
-        }
-
-        // 점수 계산
-        const balance = teamBalanceScore(a1, a2, b1, b2);
-        const partnerPenalty = getPartnerScore(a1.id, a2.id) * 10 + getPartnerScore(b1.id, b2.id) * 10;
-        const consecPenalty = [a1,a2,b1,b2].reduce((acc, p) => acc + getConsecutive(p.id, gi) * 5, 0);
-        const totalScore = balance + partnerPenalty + consecPenalty;
-
-        if (totalScore < bestScore) {
-          bestScore = totalScore;
-          bestGame = { a1, a2, b1, b2, type };
+      // 2차: 중복 없는 조합이 없으면 (인원 부족) 파트너만 바꿔서 선택
+      if (best === null || bestScore === Infinity) {
+        bestScore = Infinity;
+        for (const c of candidates) {
+          const s = scoreCombo(c.a1, c.a2, c.b1, c.b2, gi, false);
+          if (s < bestScore) { bestScore = s; best = c; }
         }
       }
 
-      if (bestGame) {
-        games.push(bestGame);
-        addPartner(bestGame.a1.id, bestGame.a2.id);
-        addPartner(bestGame.b1.id, bestGame.b2.id);
-        addPlay([bestGame.a1.id, bestGame.a2.id, bestGame.b1.id, bestGame.b2.id], gi);
+      if (best) {
+        games.push({ ...best, type });
+        updateTracking(best.a1, best.a2, best.b1, best.b2, gi);
       }
     }
 
@@ -1074,7 +1150,17 @@ export default function App() {
                                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${attended?`${getGenderBg(m.gender)} font-medium`:'bg-white border-stone-200 text-stone-600'} ${isConf?'opacity-70':''}`}>
                                 <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${attended?'bg-emerald-600 border-emerald-600':'border-stone-300'}`}>{attended&&<Check size={12} className="text-white"/>}</div>
                                 <span className={`truncate ${attended?getGenderColor(m.gender):''}`}>{m.name}</span>
-                                <span className={`text-xs px-1 rounded ml-auto flex-shrink-0 ${getGenderBadge(m.gender)}`}>{m.gender==='M'?'남':'여'}</span>
+                                {(() => {
+                                  const dayStat = getDayStats(selectedDate).find(s => s.id === m.id);
+                                  if (!dayStat || dayStat.total === 0) return <span className={`text-xs px-1 rounded ml-auto flex-shrink-0 ${getGenderBadge(m.gender)}`}>{m.gender==='M'?'남':'여'}</span>;
+                                  return (
+                                    <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
+                                      {dayStat.wins > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded font-bold">{dayStat.wins}승</span>}
+                                      {dayStat.draws > 0 && <span className="text-xs bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">{dayStat.draws}무</span>}
+                                      {dayStat.losses > 0 && <span className="text-xs bg-red-100 text-red-600 px-1 py-0.5 rounded font-bold">{dayStat.losses}패</span>}
+                                    </div>
+                                  );
+                                })()}
                               </button>
                             );
                           })}
@@ -1160,6 +1246,12 @@ export default function App() {
                       isDateConfirmed?
                         <button onClick={()=>unconfirmDateMatches(selectedDate)} className="w-full py-2.5 bg-stone-100 border border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5"><Lock size={14}/> 경기 확정 해제 (비번 필요)</button>:
                         hasUnconfirmed?<button onClick={()=>confirmDateMatches(selectedDate)} className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5"><Lock size={14}/> 경기 확정하기</button>:null
+                    )}
+                    {matches.filter(m=>m.date===selectedDate&&!m.isScheduled&&m.scoreA!==null).length>0&&(
+                      <button onClick={()=>{setDayResultDate(selectedDate);setShowDayResultModal(true);}}
+                        className="w-full py-2.5 bg-gradient-to-r from-yellow-500 to-amber-500 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+                        🏆 오늘의 결과 보기
+                      </button>
                     )}
                   </div>
                 </div>
@@ -1467,6 +1559,111 @@ export default function App() {
         </Modal>
       )}
 
+      {showDayResultModal && dayResultDate && (() => {
+        const dayStats = getDayStats(dayResultDate);
+        const dayPartners = getDayPartnerStats(dayResultDate);
+        const best = dayPartners.filter(c=>c.total>=2).sort((a,b)=>b.winRate-a.winRate||b.wins-a.wins)[0];
+        const worst = dayPartners.filter(c=>c.total>=2).sort((a,b)=>a.winRate-b.winRate||a.wins-b.wins)[0];
+        const top3 = dayStats.slice(0,3);
+        const medals = ['🥇','🥈','🥉'];
+        const podiumColors = [
+          'bg-gradient-to-br from-yellow-400 to-yellow-600 text-yellow-900',
+          'bg-gradient-to-br from-stone-300 to-stone-400 text-stone-800',
+          'bg-gradient-to-br from-amber-600 to-amber-800 text-amber-50'
+        ];
+        const podiumHeights = ['h-28','h-36','h-20'];
+        const podiumOrder = [1,0,2]; // 2위, 1위, 3위 순서로 표시
+        return (
+          <Modal onClose={()=>setShowDayResultModal(false)} title={`🏆 ${dayResultDate.replace(/-/g,'.')} 결과`}>
+            <div className="space-y-5">
+              {/* 시상대 */}
+              {top3.length >= 2 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {podiumOrder.map((idx) => {
+                    const player = top3[idx];
+                    if (!player) return <div key={idx}></div>;
+                    return (
+                      <div key={player.id} className="flex flex-col items-center">
+                        <div className="text-2xl mb-1">{medals[idx]}</div>
+                        <div className={`text-xs font-bold truncate w-full text-center px-1 ${player.gender==='M'?'text-blue-600':'text-pink-500'}`}>{player.name}</div>
+                        <div className={`${podiumColors[idx]} ${podiumHeights[podiumOrder.indexOf(idx)]} w-full rounded-t-lg flex flex-col items-center justify-center mt-1`}>
+                          <div className="text-xs font-bold opacity-80">{idx+1}위</div>
+                          <div className="text-lg font-bold">{player.winRate.toFixed(0)}%</div>
+                          <div className="text-xs opacity-90">{player.wins}승{player.draws>0?` ${player.draws}무`:''} {player.losses}패</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* 전체 순위 */}
+              <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
+                <div className="px-4 py-2.5 bg-stone-50 border-b border-stone-100 text-sm font-bold text-stone-700">📊 오늘의 순위</div>
+                <div className="divide-y divide-stone-100">
+                  {dayStats.map((p, i) => (
+                    <div key={p.id} className="px-4 py-2.5 flex items-center gap-2">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${i===0?'bg-yellow-100 text-yellow-700':i===1?'bg-stone-100 text-stone-600':i===2?'bg-amber-100 text-amber-700':'bg-stone-50 text-stone-400'}`}>{i+1}</div>
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${p.gender==='M'?'bg-blue-100 text-blue-700':'bg-pink-100 text-pink-600'}`}>{p.gender==='M'?'♂':'♀'}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className={`font-semibold text-sm truncate ${p.gender==='M'?'text-blue-600':'text-pink-500'}`}>{p.name}</div>
+                        <div className="text-xs text-stone-400">{p.wins}승{p.draws>0?` ${p.draws}무`:''} {p.losses}패 · {p.gamesWon}게임</div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className={`text-base font-bold ${p.winRate>=60?'text-emerald-600':p.winRate>=40?'text-stone-600':'text-red-500'}`}>{p.winRate.toFixed(0)}%</div>
+                      </div>
+                    </div>
+                  ))}
+                  {dayStats.length===0&&<div className="px-4 py-6 text-center text-sm text-stone-400">경기 결과가 없어요</div>}
+                </div>
+              </div>
+
+              {/* 베스트/워스트 조합 */}
+              {(best || worst) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {best && (
+                    <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200">
+                      <div className="text-xs font-bold text-emerald-700 mb-1.5">🔥 베스트 조합</div>
+                      <div className="text-sm font-bold text-stone-800 truncate">{best.name1} · {best.name2}</div>
+                      <div className="text-xs text-stone-500 mt-0.5">{best.wins}승{best.draws>0?` ${best.draws}무`:''} {best.losses}패</div>
+                      <div className="text-lg font-bold text-emerald-600 mt-1">{best.winRate.toFixed(0)}%</div>
+                    </div>
+                  )}
+                  {worst && worst !== best && (
+                    <div className="bg-red-50 rounded-lg p-3 border border-red-200">
+                      <div className="text-xs font-bold text-red-600 mb-1.5">💀 워스트 조합</div>
+                      <div className="text-sm font-bold text-stone-800 truncate">{worst.name1} · {worst.name2}</div>
+                      <div className="text-xs text-stone-500 mt-0.5">{worst.wins}승{worst.draws>0?` ${worst.draws}무`:''} {worst.losses}패</div>
+                      <div className="text-lg font-bold text-red-500 mt-1">{worst.winRate.toFixed(0)}%</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 전체 파트너 */}
+              {dayPartners.length > 0 && (
+                <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-stone-50 border-b border-stone-100 text-sm font-bold text-stone-700">🤝 오늘의 파트너 조합</div>
+                  <div className="divide-y divide-stone-100">
+                    {dayPartners.map((c,i)=>(
+                      <div key={i} className="px-4 py-2.5 flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-stone-800">{c.name1} · {c.name2}</div>
+                          <div className="text-xs text-stone-400">{c.total}경기 · {c.wins}승{c.draws>0?` ${c.draws}무`:''} {c.losses}패</div>
+                        </div>
+                        <div className={`text-base font-bold ${c.winRate>=60?'text-emerald-600':c.winRate>=40?'text-stone-600':'text-red-500'}`}>{c.winRate.toFixed(0)}%</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button onClick={()=>setShowDayResultModal(false)} className="w-full py-2.5 border border-stone-200 text-stone-500 rounded-lg text-sm">닫기</button>
+            </div>
+          </Modal>
+        );
+      })()}
+
       {showAutoModal&&(
         <Modal onClose={()=>{setShowAutoModal(false);setAutoPreview(null);}} title="🎲 자동 대진 생성">
           <div className="space-y-4">
@@ -1492,21 +1689,92 @@ export default function App() {
               </div>
             </div>
             {!autoPreview?(
-              <button onClick={generateAutoSchedule} className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2">🎲 대진 생성하기</button>
+              <button onClick={()=>{setSwapSelected([]);generateAutoSchedule();}} className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2">🎲 대진 생성하기</button>
             ):(
               <div className="space-y-3">
-                <div className="text-xs font-semibold text-stone-600">생성된 대진 ({autoPreview.length}경기)</div>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {autoPreview.map((g,i)=>(
-                    <div key={i} className={`text-xs rounded px-3 py-2 flex items-center gap-2 ${getMatchTypeLabel(g.type).color}`}>
-                      <span className="font-bold flex-shrink-0">{i+1}</span>
-                      <span className="flex-shrink-0">{getMatchTypeLabel(g.type).label}</span>
-                      <span className="flex-1 truncate">{g.a1.name}·{g.a2.name} vs {g.b1.name}·{g.b2.name}</span>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-stone-600">생성된 대진 ({autoPreview.length}경기)</div>
+                  <div className="text-xs text-stone-400">선수 탭 → 2명 선택 → 교체</div>
+                </div>
+                {swapSelected.length > 0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                    <div className="text-xs text-blue-700 font-medium">
+                      {swapSelected.length===1 ? `${swapSelected[0].name} 선택됨 → 교체할 선수 선택` : `${swapSelected[0].name} ↔ ${swapSelected[1].name}`}
                     </div>
-                  ))}
+                    {swapSelected.length===2 && (
+                      <button onClick={()=>{
+                        const [s1, s2] = swapSelected;
+                        setAutoPreview(prev => prev.map(g => {
+                          const slots = ['a1','a2','b1','b2'];
+                          const newG = {...g};
+                          const pos1 = slots.find(k => newG[k].id === s1.id);
+                          const pos2 = slots.find(k => newG[k].id === s2.id);
+                          if (pos1 && pos2) { [newG[pos1], newG[pos2]] = [newG[pos2], newG[pos1]]; }
+                          else if (pos1) { newG[pos1] = s2; }
+                          else if (pos2) { newG[pos2] = s1; }
+                          return newG;
+                        }));
+                        setSwapSelected([]);
+                      }} className="text-xs bg-blue-600 text-white px-3 py-1 rounded-lg font-medium">교체</button>
+                    )}
+                    <button onClick={()=>setSwapSelected([])} className="text-xs text-stone-400 ml-2">✕</button>
+                  </div>
+                )}
+                <div className="space-y-2 max-h-72 overflow-y-auto">
+                  {autoPreview.map((g,i)=>{
+                    const typeInfo = getMatchTypeLabel(g.type);
+                    return (
+                      <div key={i} className={`rounded-lg border p-2.5 ${typeInfo.color.replace('bg-','border-').replace('100','200')} bg-white`}>
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <span className="text-xs font-bold text-stone-500">{i+1}경기</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${typeInfo.color}`}>{typeInfo.label}</span>
+                          {/* 포/백 교체 버튼 */}
+                          <div className="flex gap-1 ml-auto">
+                            <button onClick={()=>setAutoPreview(prev=>prev.map((pg,pi)=>pi===i?{...pg,a1:pg.a2,a2:pg.a1}:pg))}
+                              className="text-xs bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded font-medium">A↔</button>
+                            <button onClick={()=>setAutoPreview(prev=>prev.map((pg,pi)=>pi===i?{...pg,b1:pg.b2,b2:pg.b1}:pg))}
+                              className="text-xs bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded font-medium">B↔</button>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 space-y-1">
+                            {[['a1','포'],['a2','백']].map(([k,pos])=>{
+                              const p = g[k];
+                              const isSel = swapSelected.some(s=>s.id===p.id);
+                              return (
+                                <button key={k} onClick={()=>{
+                                  if(swapSelected.some(s=>s.id===p.id)){setSwapSelected(prev=>prev.filter(s=>s.id!==p.id));return;}
+                                  if(swapSelected.length<2) setSwapSelected(prev=>[...prev,{...p,gameIdx:i,slot:k}]);
+                                }} className={`w-full flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-all ${isSel?'bg-blue-500 text-white':'bg-stone-50 hover:bg-stone-100 text-stone-700'}`}>
+                                  <span className="text-stone-400 flex-shrink-0">{pos}</span>
+                                  <span className={`font-medium ${p.gender==='M'?'text-blue-600':'text-pink-500'} ${isSel?'text-white':''}`}>{p.name}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="text-stone-300 font-bold text-sm">vs</div>
+                          <div className="flex-1 space-y-1">
+                            {[['b1','포'],['b2','백']].map(([k,pos])=>{
+                              const p = g[k];
+                              const isSel = swapSelected.some(s=>s.id===p.id);
+                              return (
+                                <button key={k} onClick={()=>{
+                                  if(swapSelected.some(s=>s.id===p.id)){setSwapSelected(prev=>prev.filter(s=>s.id!==p.id));return;}
+                                  if(swapSelected.length<2) setSwapSelected(prev=>[...prev,{...p,gameIdx:i,slot:k}]);
+                                }} className={`w-full flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-all ${isSel?'bg-blue-500 text-white':'bg-stone-50 hover:bg-stone-100 text-stone-700'}`}>
+                                  <span className="text-stone-400 flex-shrink-0">{pos}</span>
+                                  <span className={`font-medium ${p.gender==='M'?'text-blue-600':'text-pink-500'} ${isSel?'text-white':''}`}>{p.name}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={()=>{setAutoPreview(null);}} className="flex-1 py-2.5 border border-stone-300 text-stone-700 rounded-lg text-sm font-medium">다시 생성</button>
+                  <button onClick={()=>{setAutoPreview(null);setSwapSelected([]);}} className="flex-1 py-2.5 border border-stone-300 text-stone-700 rounded-lg text-sm font-medium">다시 생성</button>
                   <button onClick={applyAutoSchedule} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold">등록하기 ✅</button>
                 </div>
               </div>
