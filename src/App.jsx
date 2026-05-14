@@ -1,4 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { createClient } from '@supabase/supabase-js';
 import { Trophy, Plus, Users, Calendar, Award, X, Trash2, ChevronLeft, ChevronRight, Check, Pencil, Lock, ChevronDown, ChevronUp, BarChart2, Crown, Filter, Save } from 'lucide-react';
 
@@ -167,6 +182,26 @@ export default function App() {
       dgMap[g.attend_date].push({ id: g.id, name: g.name, gender: g.gender, isGuest: true, originalName: g.original_name });
     });
     setDateGuests(dgMap);
+  };
+
+  // DnD 센서 설정 - 모바일 꾹 누르기 500ms 후 드래그 시작
+  const sensors = useSensors(
+    useSensor(TouchSensor, { activationConstraint: { delay: 400, tolerance: 8 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = selectedDateMatches.findIndex(m => m.id === active.id);
+    const newIndex = selectedDateMatches.findIndex(m => m.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(selectedDateMatches, oldIndex, newIndex);
+    // DB에 matchOrder 업데이트
+    for (let i = 0; i < reordered.length; i++) {
+      await supabase.from('matches').update({ match_order: i + 1 }).eq('id', reordered[i].id);
+    }
+    await loadAll();
   };
 
   const loadAll = async () => {
@@ -1088,43 +1123,31 @@ export default function App() {
                           <Trash2 size={14}/> 선택한 {selectedMatchIds.length}개 삭제
                         </button>
                       )}
-                      <div className="space-y-2">
-                        {selectedDateMatches.map((match,idx)=>{
-                          const typeInfo=getMatchTypeLabel(match.matchType);
-                          const draw=match.isDraw||(match.scoreA===match.scoreB&&!match.isScheduled);
-                          const isSel=selectedMatchIds.includes(match.id);
-                          return(
-                            <div key={match.id} onClick={()=>selectMode&&toggleSelectMatch(match.id)}
-                              className={`p-3 rounded-lg border ${isSel?'bg-red-50 border-red-300':match.isScheduled?'bg-orange-50 border-orange-200':match.confirmed?'bg-blue-50 border-blue-200':'bg-stone-50 border-stone-200'} ${selectMode?'cursor-pointer':''}`}>
-                              <div className="flex items-center gap-2 mb-2">
-                                {selectMode&&<div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isSel?'bg-red-500 border-red-500':'border-stone-300'}`}>{isSel&&<Check size={10} className="text-white"/>}</div>}
-                                <span className="text-xs font-bold text-stone-500">{idx+1}경기</span>
-                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${typeInfo.color}`}>{typeInfo.label}</span>
-                                {match.isScheduled?<span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-bold">대진예정</span>
-                                  :draw?<span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">무승부</span>
-                                  :match.confirmed?<span className="text-xs text-blue-600 flex items-center gap-0.5"><Lock size={10}/>확정</span>
-                                  :<span className="text-xs text-stone-400">미확정</span>}
-                                <div className="flex-1"></div>
-                                {!selectMode&&match.isScheduled&&<button onClick={()=>openScoreModal(match)} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-medium">점수입력</button>}
-                                {!selectMode&&!match.confirmed&&<button onClick={()=>openEditMatch(match)} className="text-stone-400 p-1"><Pencil size={13}/></button>}
-                                {!selectMode&&<button onClick={()=>deleteMatch(match)} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className={`flex-1 text-sm min-w-0 ${!match.isScheduled&&!draw&&match.scoreA>match.scoreB?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
-                                  <div className="truncate"><span className="text-xs text-stone-400 mr-1">포</span>{getMemberName(match.teamA1,match.date)}</div>
-                                  <div className="truncate"><span className="text-xs text-stone-400 mr-1">백</span>{getMemberName(match.teamA2,match.date)}</div>
-                                </div>
-                                {match.isScheduled?<div className="font-mono text-stone-400 bg-stone-100 px-3 py-1.5 rounded text-sm flex-shrink-0">vs</div>:
-                                  <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA} - {match.scoreB}</div>}
-                                <div className={`flex-1 text-sm text-right min-w-0 ${!match.isScheduled&&!draw&&match.scoreB>match.scoreA?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
-                                  <div className="truncate"><span className="text-xs text-stone-400 mr-1">포</span>{getMemberName(match.teamB1,match.date)}</div>
-                                  <div className="truncate"><span className="text-xs text-stone-400 mr-1">백</span>{getMemberName(match.teamB2,match.date)}</div>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                        <SortableContext items={selectedDateMatches.map(m=>m.id)} strategy={verticalListSortingStrategy}>
+                          <div className="space-y-2">
+                            {selectedDateMatches.map((match,idx)=>(
+                              <SortableMatch
+                                key={match.id}
+                                match={match}
+                                idx={idx}
+                                selectMode={selectMode}
+                                selectedMatchIds={selectedMatchIds}
+                                toggleSelectMatch={toggleSelectMatch}
+                                openScoreModal={openScoreModal}
+                                openEditMatch={openEditMatch}
+                                deleteMatch={deleteMatch}
+                                getMemberName={getMemberName}
+                                getMatchTypeLabel={getMatchTypeLabel}
+                                Lock={Lock}
+                                Check={Check}
+                                Pencil={Pencil}
+                                Trash2={Trash2}
+                              />
+                            ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
                     </div>
                   )}
 
@@ -1639,6 +1662,60 @@ function EmptyState({icon:Icon,title,desc}) {
       <Icon className="mx-auto text-stone-300 mb-3" size={40}/>
       <div className="font-semibold text-stone-700 mb-1">{title}</div>
       <div className="text-sm text-stone-500">{desc}</div>
+    </div>
+  );
+}
+
+// 드래그 가능한 경기 카드
+function SortableMatch({ match, idx, selectMode, selectedMatchIds, toggleSelectMatch, openScoreModal, openEditMatch, deleteMatch, getMemberName, getMatchTypeLabel, Lock, Check, Pencil, Trash2 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: match.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 999 : 'auto',
+  };
+  const typeInfo = getMatchTypeLabel(match.matchType);
+  const draw = match.isDraw || (match.scoreA === match.scoreB && !match.isScheduled);
+  const isSel = selectedMatchIds.includes(match.id);
+
+  return (
+    <div ref={setNodeRef} style={style}
+      className={`p-3 rounded-lg border ${isSel?'bg-red-50 border-red-300':match.isScheduled?'bg-orange-50 border-orange-200':match.confirmed?'bg-blue-50 border-blue-200':'bg-stone-50 border-stone-200'} ${selectMode?'cursor-pointer':''}`}
+      onClick={() => selectMode && toggleSelectMatch(match.id)}>
+      <div className="flex items-center gap-2 mb-2">
+        {/* 드래그 핸들 - 세 줄 아이콘 */}
+        {!selectMode && (
+          <div {...attributes} {...listeners} className="flex flex-col gap-0.5 p-1.5 cursor-grab active:cursor-grabbing flex-shrink-0 touch-none">
+            <div className="w-4 h-0.5 bg-stone-300 rounded"></div>
+            <div className="w-4 h-0.5 bg-stone-300 rounded"></div>
+            <div className="w-4 h-0.5 bg-stone-300 rounded"></div>
+          </div>
+        )}
+        {selectMode && <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isSel?'bg-red-500 border-red-500':'border-stone-300'}`}>{isSel&&<Check size={10} className="text-white"/>}</div>}
+        <span className="text-xs font-bold text-stone-500">{idx+1}경기</span>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${typeInfo.color}`}>{typeInfo.label}</span>
+        {match.isScheduled?<span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-bold">대진예정</span>
+          :draw?<span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">무승부</span>
+          :match.confirmed?<span className="text-xs text-blue-600 flex items-center gap-0.5"><Lock size={10}/>확정</span>
+          :<span className="text-xs text-stone-400">미확정</span>}
+        <div className="flex-1"></div>
+        {!selectMode&&match.isScheduled&&<button onClick={e=>{e.stopPropagation();openScoreModal(match);}} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-medium">점수입력</button>}
+        {!selectMode&&!match.confirmed&&<button onClick={e=>{e.stopPropagation();openEditMatch(match);}} className="text-stone-400 p-1"><Pencil size={13}/></button>}
+        {!selectMode&&<button onClick={e=>{e.stopPropagation();deleteMatch(match);}} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
+      </div>
+      <div className="flex items-center gap-2">
+        <div className={`flex-1 text-sm min-w-0 ${!match.isScheduled&&!draw&&match.scoreA>match.scoreB?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
+          <div className="truncate"><span className="text-xs text-stone-400 mr-1">포</span>{getMemberName(match.teamA1,match.date)}</div>
+          <div className="truncate"><span className="text-xs text-stone-400 mr-1">백</span>{getMemberName(match.teamA2,match.date)}</div>
+        </div>
+        {match.isScheduled?<div className="font-mono text-stone-400 bg-stone-100 px-3 py-1.5 rounded text-sm flex-shrink-0">vs</div>:
+          <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA} - {match.scoreB}</div>}
+        <div className={`flex-1 text-sm text-right min-w-0 ${!match.isScheduled&&!draw&&match.scoreB>match.scoreA?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
+          <div className="truncate"><span className="text-xs text-stone-400 mr-1">포</span>{getMemberName(match.teamB1,match.date)}</div>
+          <div className="truncate"><span className="text-xs text-stone-400 mr-1">백</span>{getMemberName(match.teamB2,match.date)}</div>
+        </div>
+      </div>
     </div>
   );
 }
