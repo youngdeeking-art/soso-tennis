@@ -99,6 +99,10 @@ export default function App() {
 
   const [selectedMatchIds, setSelectedMatchIds] = useState([]);
   const [selectMode, setSelectMode] = useState(false);
+  const [editOrderMode, setEditOrderMode] = useState(false); // 순서 편집 모드
+  const [localMatchOrder, setLocalMatchOrder] = useState([]); // 로컬 순서
+  const [swapMode, setSwapMode] = useState(false); // 선수 교체 모드
+  const [swapTarget, setSwapTarget] = useState(null); // 첫 번째 선택 선수
 
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
@@ -193,16 +197,58 @@ export default function App() {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  const handleDragEnd = async (event) => {
+  const handleDragEnd = (event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = selectedDateMatches.findIndex(m => m.id === active.id);
-    const newIndex = selectedDateMatches.findIndex(m => m.id === over.id);
+    const oldIndex = localMatchOrder.findIndex(m => m.id === active.id);
+    const newIndex = localMatchOrder.findIndex(m => m.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
-    const reordered = arrayMove(selectedDateMatches, oldIndex, newIndex);
-    // DB에 matchOrder 업데이트
-    for (let i = 0; i < reordered.length; i++) {
-      await supabase.from('matches').update({ match_order: i + 1 }).eq('id', reordered[i].id);
+    setLocalMatchOrder(prev => arrayMove(prev, oldIndex, newIndex));
+  };
+
+  const saveMatchOrder = async () => {
+    for (let i = 0; i < localMatchOrder.length; i++) {
+      await supabase.from('matches').update({ match_order: i + 1 }).eq('id', localMatchOrder[i].id);
+    }
+    setEditOrderMode(false);
+    setLocalMatchOrder([]);
+    await loadAll();
+  };
+
+  // 선수 교체 (DB 저장)
+  const handleSwapPlayer = async (targetPlayer, slot, matchId) => {
+    if (!swapTarget) {
+      setSwapTarget({ player: targetPlayer, slot, matchId });
+      return;
+    }
+    if (swapTarget.player.id === targetPlayer.id) {
+      setSwapTarget(null);
+      return;
+    }
+    // 두 선수 교체
+    const slotMap = { a1: 'team_a1', a2: 'team_a2', b1: 'team_b1', b2: 'team_b2' };
+    if (swapTarget.matchId === matchId) {
+      // 같은 경기 내 교체
+      await supabase.from('matches').update({
+        [slotMap[swapTarget.slot]]: targetPlayer.id,
+        [slotMap[slot]]: swapTarget.player.id,
+      }).eq('id', matchId);
+    } else {
+      // 다른 경기 간 교체
+      await supabase.from('matches').update({ [slotMap[swapTarget.slot]]: targetPlayer.id }).eq('id', swapTarget.matchId);
+      await supabase.from('matches').update({ [slotMap[slot]]: swapTarget.player.id }).eq('id', matchId);
+    }
+    setSwapTarget(null);
+    setSwapMode(false);
+    await loadAll();
+  };
+
+  // 포/백 교체 (DB 저장)
+  const swapPoBack = async (match, team) => {
+    if (team === 'A') {
+      await supabase.from('matches').update({ team_a1: match.teamA2, team_a2: match.teamA1 }).eq('id', match.id);
+    } else {
+      await supabase.from('matches').update({ team_b1: match.teamB2, team_b2: match.teamB1 }).eq('id', match.id);
     }
     await loadAll();
   };
@@ -278,7 +324,13 @@ export default function App() {
     if (teamB2 === guestId) setTeamB2('');
   };
 
-  const toggleLocalAttendance = (memberId) => {
+  const toggleLocalAttendance = async (memberId) => {
+    if (attendanceConfirmed[selectedDate]) {
+      if (!checkPassword()) return;
+      // 비번 맞으면 확정 자동 해제
+      await supabase.from('attendance_confirmed').upsert({ attend_date: selectedDate, confirmed: false }, { onConflict: 'attend_date' });
+      setAttendanceConfirmed(prev => ({ ...prev, [selectedDate]: false }));
+    }
     const base = localAttendance || (attendance[selectedDate] || []);
     const updated = base.includes(memberId) ? base.filter(id => id !== memberId) : [...base, memberId];
     setLocalAttendance(updated);
@@ -726,28 +778,54 @@ export default function App() {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const attendeeNames = [], guestNames = [], matchList = [];
     let section = '', currentMatch = null;
+
+    const cleanName = (n) => n.replace(/\(게스트\)|\(Guest\)/gi,'').replace(/\(.*?\)/g,'').trim();
+    const isGuest = (n) => n.includes('(게스트)') || n.includes('(Guest)');
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+
       if (line.includes('참석자')) { section = 'attendees'; continue; }
+
+      // 형식1: ■ 21:00 혼복①
       if (line.match(/^[■●▶◆]\s*\d{2}:\d{2}/)) {
         if (currentMatch) matchList.push(currentMatch);
         const tm = line.match(/^[■●▶◆]\s*(\d{2}:\d{2})\s*(.*)/);
         currentMatch = { time: tm?.[1]||'', title: tm?.[2]||'', teamA: [], teamB: [], side: 'A' };
         section = 'match'; continue;
       }
+
+      // 형식2: 21:00 (남복 1)
+      if (line.match(/^\d{2}:\d{2}/)) {
+        if (currentMatch) matchList.push(currentMatch);
+        const tm = line.match(/^(\d{2}:\d{2})\s*(.*)/);
+        currentMatch = { time: tm?.[1]||'', title: tm?.[2]||'', teamA: [], teamB: [], side: 'A' };
+        section = 'match'; continue;
+      }
+
+      // 형식2 경기줄: "신영대 / 남게스트 vs 윤찬민 / 최푸름"
+      if (section === 'match' && currentMatch && line.match(/\s+vs\s+/i)) {
+        const parts = line.split(/\s+vs\s+/i);
+        parts[0].split('/').map(n=>cleanName(n)).filter(Boolean).forEach(n => currentMatch.teamA.push(n));
+        if (parts[1]) parts[1].split('/').map(n=>cleanName(n)).filter(Boolean).forEach(n => currentMatch.teamB.push(n));
+        continue;
+      }
+
       if (section === 'attendees') {
         if (line === '남자' || line === '여자') continue;
         line.split(/[\/,]/).map(n => n.trim()).filter(Boolean).forEach(name => {
-          if (name.includes('(게스트)') || name.includes('(Guest)')) guestNames.push(name.replace(/\(게스트\)|\(Guest\)/gi,'').trim());
+          if (isGuest(name)) guestNames.push(cleanName(name));
           else attendeeNames.push(name);
         });
+        continue;
       }
+
       if (section === 'match' && currentMatch) {
         if (line === 'vs' || line === 'VS') { currentMatch.side = 'B'; continue; }
         line.split(/[,،、]/).map(n => n.trim()).filter(Boolean).forEach(name => {
-          const clean = name.replace(/\(게스트\)|\(Guest\)/gi,'').trim();
-          if (currentMatch.side === 'A') currentMatch.teamA.push(clean);
-          else currentMatch.teamB.push(clean);
+          const cn = cleanName(name);
+          if (currentMatch.side === 'A') currentMatch.teamA.push(cn);
+          else currentMatch.teamB.push(cn);
         });
       }
     }
@@ -1199,9 +1277,32 @@ export default function App() {
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <div className="text-sm font-semibold text-stone-700">🎾 경기 ({selectedDateMatches.length})</div>
-                        <div className="flex gap-2">
-                          <button onClick={()=>{if(selectMode){setSelectMode(false);setSelectedMatchIds([]);}else setSelectMode(true);}} className={`text-xs px-2.5 py-1 rounded-lg font-medium ${selectMode?'bg-red-100 text-red-600':'bg-stone-100 text-stone-600'}`}>{selectMode?'취소':'선택삭제'}</button>
-                          <button onClick={()=>deleteAllDateMatches(selectedDate)} className="text-xs px-2.5 py-1 rounded-lg font-medium bg-red-100 text-red-600">전체삭제</button>
+                        <div className="flex gap-1.5">
+                          {!editOrderMode && !selectMode && !swapMode && (
+                            <>
+                              <button onClick={()=>{setEditOrderMode(true);setLocalMatchOrder([...selectedDateMatches]);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-blue-100 text-blue-600">순서편집</button>
+                              <button onClick={()=>{setSwapMode(true);setSwapTarget(null);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-purple-100 text-purple-600">선수교체</button>
+                              <button onClick={()=>setSelectMode(true)} className="text-xs px-2 py-1 rounded-lg font-medium bg-stone-100 text-stone-600">선택삭제</button>
+                              <button onClick={()=>deleteAllDateMatches(selectedDate)} className="text-xs px-2 py-1 rounded-lg font-medium bg-red-100 text-red-600">전체삭제</button>
+                            </>
+                          )}
+                          {editOrderMode && (
+                            <>
+                              <button onClick={()=>{setEditOrderMode(false);setLocalMatchOrder([]);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-stone-100 text-stone-600">취소</button>
+                              <button onClick={saveMatchOrder} className="text-xs px-2 py-1 rounded-lg font-medium bg-blue-600 text-white">저장</button>
+                            </>
+                          )}
+                          {swapMode && (
+                            <>
+                              {swapTarget && <span className="text-xs text-purple-600 font-medium">{swapTarget.player.name} 선택됨</span>}
+                              <button onClick={()=>{setSwapMode(false);setSwapTarget(null);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-stone-100 text-stone-600">완료</button>
+                            </>
+                          )}
+                          {selectMode && (
+                            <>
+                              <button onClick={()=>{setSelectMode(false);setSelectedMatchIds([]);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-stone-100 text-stone-600">취소</button>
+                            </>
+                          )}
                         </div>
                       </div>
                       {selectMode&&selectedMatchIds.length>0&&(
@@ -1209,15 +1310,23 @@ export default function App() {
                           <Trash2 size={14}/> 선택한 {selectedMatchIds.length}개 삭제
                         </button>
                       )}
+                      {swapMode && (
+                        <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 mb-2 text-xs text-purple-700">
+                          {swapTarget ? '교체할 두 번째 선수를 탭하세요' : '교체할 첫 번째 선수를 탭하세요'}
+                        </div>
+                      )}
                       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                        <SortableContext items={selectedDateMatches.map(m=>m.id)} strategy={verticalListSortingStrategy}>
+                        <SortableContext items={(editOrderMode?localMatchOrder:selectedDateMatches).map(m=>m.id)} strategy={verticalListSortingStrategy}>
                           <div className="space-y-2">
-                            {selectedDateMatches.map((match,idx)=>(
+                            {(editOrderMode?localMatchOrder:selectedDateMatches).map((match,idx)=>(
                               <SortableMatch
                                 key={match.id}
                                 match={match}
                                 idx={idx}
                                 selectMode={selectMode}
+                                editOrderMode={editOrderMode}
+                                swapMode={swapMode}
+                                swapTarget={swapTarget}
                                 selectedMatchIds={selectedMatchIds}
                                 toggleSelectMatch={toggleSelectMatch}
                                 openScoreModal={openScoreModal}
@@ -1225,6 +1334,9 @@ export default function App() {
                                 deleteMatch={deleteMatch}
                                 getMemberName={getMemberName}
                                 getMatchTypeLabel={getMatchTypeLabel}
+                                swapPoBack={swapPoBack}
+                                handleSwapPlayer={handleSwapPlayer}
+                                dateGuests={dateGuests}
                                 Lock={Lock}
                                 Check={Check}
                                 Pencil={Pencil}
@@ -1935,29 +2047,52 @@ function EmptyState({icon:Icon,title,desc}) {
 }
 
 // 드래그 가능한 경기 카드
-function SortableMatch({ match, idx, selectMode, selectedMatchIds, toggleSelectMatch, openScoreModal, openEditMatch, deleteMatch, getMemberName, getMatchTypeLabel, Lock, Check, Pencil, Trash2 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: match.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    zIndex: isDragging ? 999 : 'auto',
-  };
+function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTarget, selectedMatchIds, toggleSelectMatch, openScoreModal, openEditMatch, deleteMatch, getMemberName, getMatchTypeLabel, swapPoBack, handleSwapPlayer, dateGuests, Lock, Check, Pencil, Trash2 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: match.id, disabled: !editOrderMode });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 999 : 'auto' };
   const typeInfo = getMatchTypeLabel(match.matchType);
   const draw = match.isDraw || (match.scoreA === match.scoreB && !match.isScheduled);
   const isSel = selectedMatchIds.includes(match.id);
+
+  const players = [
+    { id: match.teamA1, slot: 'a1', team: 'A', pos: '포' },
+    { id: match.teamA2, slot: 'a2', team: 'A', pos: '백' },
+    { id: match.teamB1, slot: 'b1', team: 'B', pos: '포' },
+    { id: match.teamB2, slot: 'b2', team: 'B', pos: '백' },
+  ];
+
+  const PlayerChip = ({ id, slot, pos }) => {
+    const name = getMemberName(id, match.date);
+    const allP = [...(dateGuests?.[match.date]||[])];
+    const gender = id?.startsWith('guest_') ? (id.includes('_M_')?'M':'F') : null;
+    const isSwapSel = swapTarget?.player?.id === id;
+    if (swapMode) {
+      return (
+        <button onClick={()=>handleSwapPlayer({id, name, gender}, slot, match.id)}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-xs w-full text-left transition-all ${isSwapSel?'bg-purple-500 text-white':'bg-purple-50 hover:bg-purple-100 text-stone-700 border border-purple-200'}`}>
+          <span className="text-stone-400 flex-shrink-0">{pos}</span>
+          <span className={`font-medium truncate`}>{name}</span>
+        </button>
+      );
+    }
+    return (
+      <div className="flex items-center gap-1 text-sm truncate">
+        <span className="text-xs text-stone-400 flex-shrink-0">{pos}</span>
+        <span className="truncate">{name}</span>
+      </div>
+    );
+  };
 
   return (
     <div ref={setNodeRef} style={style}
       className={`p-3 rounded-lg border ${isSel?'bg-red-50 border-red-300':match.isScheduled?'bg-orange-50 border-orange-200':match.confirmed?'bg-blue-50 border-blue-200':'bg-stone-50 border-stone-200'} ${selectMode?'cursor-pointer':''}`}
       onClick={() => selectMode && toggleSelectMatch(match.id)}>
       <div className="flex items-center gap-2 mb-2">
-        {/* 드래그 핸들 - 세 줄 아이콘 */}
-        {!selectMode && (
+        {editOrderMode && (
           <div {...attributes} {...listeners} className="flex flex-col gap-0.5 p-1.5 cursor-grab active:cursor-grabbing flex-shrink-0 touch-none">
-            <div className="w-4 h-0.5 bg-stone-300 rounded"></div>
-            <div className="w-4 h-0.5 bg-stone-300 rounded"></div>
-            <div className="w-4 h-0.5 bg-stone-300 rounded"></div>
+            <div className="w-4 h-0.5 bg-stone-400 rounded"></div>
+            <div className="w-4 h-0.5 bg-stone-400 rounded"></div>
+            <div className="w-4 h-0.5 bg-stone-400 rounded"></div>
           </div>
         )}
         {selectMode && <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isSel?'bg-red-500 border-red-500':'border-stone-300'}`}>{isSel&&<Check size={10} className="text-white"/>}</div>}
@@ -1968,20 +2103,40 @@ function SortableMatch({ match, idx, selectMode, selectedMatchIds, toggleSelectM
           :match.confirmed?<span className="text-xs text-blue-600 flex items-center gap-0.5"><Lock size={10}/>확정</span>
           :<span className="text-xs text-stone-400">미확정</span>}
         <div className="flex-1"></div>
-        {!selectMode&&match.isScheduled&&<button onClick={e=>{e.stopPropagation();openScoreModal(match);}} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-medium">점수입력</button>}
-        {!selectMode&&!match.confirmed&&<button onClick={e=>{e.stopPropagation();openEditMatch(match);}} className="text-stone-400 p-1"><Pencil size={13}/></button>}
-        {!selectMode&&<button onClick={e=>{e.stopPropagation();deleteMatch(match);}} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
+        {!selectMode&&!editOrderMode&&!swapMode&&match.isScheduled&&<button onClick={e=>{e.stopPropagation();openScoreModal(match);}} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-medium">점수입력</button>}
+        {!selectMode&&!editOrderMode&&!swapMode&&!match.confirmed&&<button onClick={e=>{e.stopPropagation();openEditMatch(match);}} className="text-stone-400 p-1"><Pencil size={13}/></button>}
+        {!selectMode&&!editOrderMode&&!swapMode&&<button onClick={e=>{e.stopPropagation();deleteMatch(match);}} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
       </div>
       <div className="flex items-center gap-2">
-        <div className={`flex-1 text-sm min-w-0 ${!match.isScheduled&&!draw&&match.scoreA>match.scoreB?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
-          <div className="truncate"><span className="text-xs text-stone-400 mr-1">포</span>{getMemberName(match.teamA1,match.date)}</div>
-          <div className="truncate"><span className="text-xs text-stone-400 mr-1">백</span>{getMemberName(match.teamA2,match.date)}</div>
+        <div className={`flex-1 min-w-0 space-y-1 ${!match.isScheduled&&!draw&&match.scoreA>match.scoreB?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
+          {swapMode ? (
+            <>
+              <PlayerChip id={match.teamA1} slot="a1" pos="포"/>
+              <PlayerChip id={match.teamA2} slot="a2" pos="백"/>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-1 text-sm truncate"><span className="text-xs text-stone-400">포</span><span className="truncate">{getMemberName(match.teamA1,match.date)}</span></div>
+              <div className="flex items-center gap-1 text-sm truncate"><span className="text-xs text-stone-400">백</span><span className="truncate">{getMemberName(match.teamA2,match.date)}</span></div>
+            </>
+          )}
+          {swapMode && <button onClick={e=>{e.stopPropagation();swapPoBack(match,'A');}} className="text-xs bg-stone-100 text-stone-500 px-2 py-0.5 rounded mt-0.5">A 포↔백</button>}
         </div>
-        {match.isScheduled?<div className="font-mono text-stone-400 bg-stone-100 px-3 py-1.5 rounded text-sm flex-shrink-0">vs</div>:
-          <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA} - {match.scoreB}</div>}
-        <div className={`flex-1 text-sm text-right min-w-0 ${!match.isScheduled&&!draw&&match.scoreB>match.scoreA?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
-          <div className="truncate"><span className="text-xs text-stone-400 mr-1">포</span>{getMemberName(match.teamB1,match.date)}</div>
-          <div className="truncate"><span className="text-xs text-stone-400 mr-1">백</span>{getMemberName(match.teamB2,match.date)}</div>
+        {match.isScheduled?<div className="font-mono text-stone-400 bg-stone-100 px-2 py-1 rounded text-sm flex-shrink-0">vs</div>:
+          <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA}-{match.scoreB}</div>}
+        <div className={`flex-1 min-w-0 space-y-1 text-right ${!match.isScheduled&&!draw&&match.scoreB>match.scoreA?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
+          {swapMode ? (
+            <>
+              <PlayerChip id={match.teamB1} slot="b1" pos="포"/>
+              <PlayerChip id={match.teamB2} slot="b2" pos="백"/>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-1 text-sm truncate justify-end"><span className="truncate">{getMemberName(match.teamB1,match.date)}</span><span className="text-xs text-stone-400">포</span></div>
+              <div className="flex items-center gap-1 text-sm truncate justify-end"><span className="truncate">{getMemberName(match.teamB2,match.date)}</span><span className="text-xs text-stone-400">백</span></div>
+            </>
+          )}
+          {swapMode && <button onClick={e=>{e.stopPropagation();swapPoBack(match,'B');}} className="text-xs bg-stone-100 text-stone-500 px-2 py-0.5 rounded mt-0.5">B 포↔백</button>}
         </div>
       </div>
     </div>
