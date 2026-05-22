@@ -838,15 +838,31 @@ export default function App() {
 
   const findMemberByName = (name) => {
     const normalized = normalizeName(name);
-    // 정확히 일치
     let found = members.find(m => m.name === name);
     if (found) return found;
-    // 공백/괄호 제거 후 일치
     found = members.find(m => normalizeName(m.name) === normalized);
     if (found) return found;
-    // 포함 관계
     found = members.find(m => m.name.includes(normalized) || normalized.includes(m.name));
     return found || null;
+  };
+
+  // 이름이 게스트인지 확인 (남게스트1, 남게스트2, 여게스트1 등)
+  const isGuestName = (name) => {
+    return /^(남게스트|여게스트)\d*$/.test(name.trim()) || name.includes('(게스트)') || name.includes('(Guest)');
+  };
+  const getGuestGenderFromName = (name) => {
+    return name.trim().startsWith('여') ? 'F' : 'M';
+  };
+  // 게스트 이름으로 DB 게스트 찾기 (남게스트1 → 해당 날짜의 남게스트1)
+  const findGuestByName = (name, date) => {
+    const guests = dateGuests[date] || [];
+    // 정확히 일치
+    const exact = guests.find(g => g.name === name);
+    if (exact) return exact;
+    // originalName 일치
+    const byOrig = guests.find(g => g.originalName === name);
+    if (byOrig) return byOrig;
+    return null;
   };
 
   const handleImportPreview = () => {
@@ -855,11 +871,21 @@ export default function App() {
     const matched = [], unmatched = [], fuzzyMatched = [];
 
     parsed.attendeeNames.forEach(name => {
+      // 게스트 이름이면 guestNames로 이동
+      if (isGuestName(name)) { parsed.guestNames.push(name); return; }
       const exact = members.find(m => m.name === name);
       if (exact) { matched.push({ input: name, member: exact }); return; }
       const fuzzy = findMemberByName(name);
       if (fuzzy) { fuzzyMatched.push({ input: name, member: fuzzy }); return; }
       unmatched.push(name);
+    });
+    // matchList에서도 게스트 이름 추출
+    parsed.matchList.forEach(m => {
+      [...m.teamA, ...m.teamB].forEach(name => {
+        if (isGuestName(name) && !parsed.guestNames.includes(name)) {
+          parsed.guestNames.push(name);
+        }
+      });
     });
 
     // 경기에서 등장하는 이름도 체크
@@ -898,10 +924,12 @@ export default function App() {
 
     for (let i = 0; i < uniqueGuestNames.length; i++) {
       const name = uniqueGuestNames[i];
+      // 기존 게스트에서 이름 또는 originalName으로 찾기
       const existing = existingGuests.find(g => g.originalName === name || g.name === name);
       if (existing) { guestIdMap[name] = existing.id; continue; }
+      // 멤버 목록에서 성별 추정, 게스트 이름이면 이름으로 성별 추정
       const knownMember = members.find(m => m.name === name);
-      const gender = knownMember ? knownMember.gender : 'M';
+      const gender = knownMember ? knownMember.gender : isGuestName(name) ? getGuestGenderFromName(name) : 'M';
       const currentGuests = [...existingGuests, ...Object.values(guestIdMap).map(id => ({ id, gender }))];
       const sameGenderCount = existingGuests.filter(g => g.gender === gender).length + Object.values(guestIdMap).filter(id => getGuestGender(id) === gender).length;
       const num = sameGenderCount + 1;
@@ -922,10 +950,10 @@ export default function App() {
     // 유사 매칭 (입력된 이름 → 실제 멤버)
     if (matched) matched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
     if (fuzzyMatched) fuzzyMatched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
-    // 게스트
+    // 게스트 - g.name(남게스트1 등)과 originalName 모두 등록
     freshGuests.forEach(g => {
-      if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender };
       allPlayerMap[g.name] = { id: g.id, gender: g.gender };
+      if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender };
     });
     uniqueGuestNames.forEach(name => {
       if (guestIdMap[name]) {
