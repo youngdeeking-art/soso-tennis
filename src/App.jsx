@@ -803,6 +803,14 @@ export default function App() {
         section = 'match'; continue;
       }
 
+      // 형식3: 1경기 (21:00) [혼복] 또는 1경기 (21:00)
+      if (line.match(/^\d+경기/)) {
+        if (currentMatch) matchList.push(currentMatch);
+        const tm = line.match(/(\d{2}:\d{2})/);
+        currentMatch = { time: tm?.[1]||'', title: line, teamA: [], teamB: [], side: 'A' };
+        section = 'match'; continue;
+      }
+
       // 형식2 경기줄: "신영대 / 남게스트 vs 윤찬민 / 최푸름"
       if (section === 'match' && currentMatch && line.match(/\s+vs\s+/i)) {
         const parts = line.split(/\s+vs\s+/i);
