@@ -1031,7 +1031,7 @@ export default function App() {
   const getStats = (filteredM) => members.map(member => {
     const matchPool = filteredM || matches.filter(m => !m.isScheduled);
     let wins=0,losses=0,draws=0,gW=0,gL=0,rW=0,rL=0,rD=0,foW=0,foL=0,foD=0,bW=0,bL=0,bD=0;
-    matches.filter(m=>!m.isScheduled).forEach(m => {
+    matchPool.forEach(m => {
       const inA=m.teamA1===member.id||m.teamA2===member.id, inB=m.teamB1===member.id||m.teamB2===member.id;
       if(!inA&&!inB) return;
       const isFo=m.teamA1===member.id||m.teamB1===member.id;
