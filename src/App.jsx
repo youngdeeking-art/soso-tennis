@@ -163,6 +163,11 @@ export default function App() {
   const [officerMemberId, setOfficerMemberId] = useState('');
 
   const [analysisPeriod, setAnalysisPeriod] = useState('all');
+  const [analysisQuarter, setAnalysisQuarter] = useState(Math.ceil((new Date().getMonth()+1)/3));
+  const [rankingPeriod, setRankingPeriod] = useState('quarter'); // quarter|month|year|all
+  const [rankingYear, setRankingYear] = useState(new Date().getFullYear());
+  const [rankingQuarter, setRankingQuarter] = useState(Math.ceil((new Date().getMonth()+1)/3));
+  const [rankingMonth, setRankingMonth] = useState(new Date().getMonth()+1);
   const [analysisSection, setAnalysisSection] = useState('partner');
 
   const currentYear = new Date().getFullYear();
@@ -779,7 +784,7 @@ export default function App() {
     const attendeeNames = [], guestNames = [], matchList = [];
     let section = '', currentMatch = null;
 
-    const cleanName = (n) => n.replace(/\(게스트\)|\(Guest\)/gi,'').replace(/\(.*?\)/g,'').trim();
+    const cleanName = (n) => { let r = n.replace(/\(게스트\)|\(Guest\)/gi,'').replace(/\(.*?\)/g,'').trim(); r = r.replace(/^남자게스트/, '남게스트').replace(/^여자게스트/, '여게스트'); return r; };
     const isGuest = (n) => n.includes('(게스트)') || n.includes('(Guest)');
 
     for (let i = 0; i < lines.length; i++) {
@@ -803,8 +808,8 @@ export default function App() {
         section = 'match'; continue;
       }
 
-      // 형식3: 1경기 (21:00) [혼복] 또는 1경기 (21:00)
-      if (line.match(/^\d+경기/)) {
+      // 형식3: 1경기 (21:00) [혼복] 또는 ■ 1경기 (21:00)
+      if (line.match(/^[■●▶◆]?\s*\d+경기/)) {
         if (currentMatch) matchList.push(currentMatch);
         const tm = line.match(/(\d{2}:\d{2})/);
         currentMatch = { time: tm?.[1]||'', title: line, teamA: [], teamB: [], side: 'A' };
@@ -856,10 +861,16 @@ export default function App() {
 
   // 이름이 게스트인지 확인 (남게스트1, 남게스트2, 여게스트1 등)
   const isGuestName = (name) => {
-    return /^(남게스트|여게스트)\d*$/.test(name.trim()) || name.includes('(게스트)') || name.includes('(Guest)');
+    const n = name.trim();
+    return /^(남게스트|여게스트|남자게스트|여자게스트)\d*$/.test(n) || n.includes('(게스트)') || n.includes('(Guest)');
   };
   const getGuestGenderFromName = (name) => {
-    return name.trim().startsWith('여') ? 'F' : 'M';
+    const n = name.trim();
+    return (n.startsWith('여게스트') || n.startsWith('여자게스트')) ? 'F' : 'M';
+  };
+  // 남자게스트1 → 남게스트1 정규화
+  const normalizeGuestName = (name) => {
+    return name.replace(/^남자게스트/, '남게스트').replace(/^여자게스트/, '여게스트');
   };
   // 게스트 이름으로 DB 게스트 찾기 (남게스트1 → 해당 날짜의 남게스트1)
   const findGuestByName = (name, date) => {
@@ -1004,7 +1015,21 @@ export default function App() {
   const getGenderBg = (g) => g === 'M' ? 'bg-blue-50 border-blue-200' : 'bg-pink-50 border-pink-200';
   const getGenderBadge = (g) => g === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-600';
 
-  const getStats = () => members.map(member => {
+  // 랭킹 기간 필터
+  const getRankingFilteredMatches = () => {
+    return matches.filter(m => {
+      if (m.isScheduled) return false;
+      const d = new Date(m.date);
+      const y = d.getFullYear(), mo = d.getMonth()+1, q = Math.ceil(mo/3);
+      if (rankingPeriod === 'quarter') return y === rankingYear && q === rankingQuarter;
+      if (rankingPeriod === 'month') return y === rankingYear && mo === rankingMonth;
+      if (rankingPeriod === 'year') return y === rankingYear;
+      return true; // all
+    });
+  };
+
+  const getStats = (filteredM) => members.map(member => {
+    const matchPool = filteredM || matches.filter(m => !m.isScheduled);
     let wins=0,losses=0,draws=0,gW=0,gL=0,rW=0,rL=0,rD=0,foW=0,foL=0,foD=0,bW=0,bL=0,bD=0;
     matches.filter(m=>!m.isScheduled).forEach(m => {
       const inA=m.teamA1===member.id||m.teamA2===member.id, inB=m.teamB1===member.id||m.teamB2===member.id;
@@ -1023,8 +1048,9 @@ export default function App() {
     return {...member,wins,losses,draws,total:wins+losses+draws,rankedWins:rW,rankedLosses:rL,rankedDraws:rD,rankedTotal:rT,winRate:wr,gamesWon:gW,gamesLost:gL,attendanceCount:attC,isPresident:isCurrentPresident(member.id),foWins:foW,foLosses:foL,foDraws:foD,foTotal:foT,foWinRate:foT>0?((foW+foD*0.5)/foT*100):null,baekWins:bW,baekLosses:bL,baekDraws:bD,baekTotal:bT,baekWinRate:bT>0?((bW+bD*0.5)/bT*100):null};
   });
 
-  const allStats = getStats();
-  const stats = [...allStats].sort((a,b)=>b.winRate-a.winRate||b.rankedWins-a.rankedWins||(b.gamesWon-b.gamesLost)-(a.gamesWon-a.gamesLost));
+  const allStats = getStats(); // 전체 (분석탭용)
+  const rankingStats = getStats(getRankingFilteredMatches()); // 기간 필터 (랭킹탭용)
+  const stats = [...rankingStats].sort((a,b)=>b.winRate-a.winRate||b.rankedWins-a.rankedWins||(b.gamesWon-b.gamesLost)-(a.gamesWon-a.gamesLost));
 
   const getSortedFilteredStats = () => {
     let r=[...allStats];
@@ -1037,7 +1063,13 @@ export default function App() {
     return r;
   };
 
-  const filteredMatches=matches.filter(m=>{if(!isRanked(m.matchType)||m.isScheduled)return false;if(analysisPeriod==='year')return new Date(m.date).getFullYear()===currentYear;return true;});
+  const filteredMatches=matches.filter(m=>{
+    if(!isRanked(m.matchType)||m.isScheduled)return false;
+    const d=new Date(m.date), y=d.getFullYear(), q=Math.ceil((d.getMonth()+1)/3);
+    if(analysisPeriod==='year') return y===currentYear;
+    if(analysisPeriod==='quarter') return y===currentYear && q===analysisQuarter;
+    return true;
+  });
 
   const getPartnerStats=()=>{
     const combos={};
@@ -1410,6 +1442,50 @@ export default function App() {
 
         {activeTab==='ranking'&&(
           <div className="space-y-4">
+            {/* 기간 선택 */}
+            <div className="bg-white rounded-lg border border-stone-200 p-3 space-y-3">
+              <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
+                {[['quarter','분기'],['month','월별'],['year','연도'],['all','전체']].map(([v,l])=>(
+                  <button key={v} onClick={()=>setRankingPeriod(v)} className={`flex-1 py-2 rounded-md text-xs font-medium transition-all ${rankingPeriod===v?'bg-white text-stone-800 shadow-sm':'text-stone-500'}`}>{l}</button>
+                ))}
+              </div>
+              {rankingPeriod==='quarter'&&(
+                <div className="flex gap-2 items-center">
+                  <input type="number" value={rankingYear} onChange={e=>setRankingYear(parseInt(e.target.value))} className="w-20 px-2 py-1.5 border border-stone-300 rounded-lg text-center text-sm"/>
+                  <span className="text-sm text-stone-500">년</span>
+                  <div className="flex gap-1 flex-1">
+                    {[1,2,3,4].map(q=>(
+                      <button key={q} onClick={()=>setRankingQuarter(q)} className={`flex-1 py-1.5 rounded-lg text-xs font-medium border ${rankingQuarter===q?'bg-emerald-800 text-white border-emerald-800':'bg-white text-stone-600 border-stone-200'}`}>{q}분기</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {rankingPeriod==='month'&&(
+                <div className="flex gap-2 items-center">
+                  <input type="number" value={rankingYear} onChange={e=>setRankingYear(parseInt(e.target.value))} className="w-20 px-2 py-1.5 border border-stone-300 rounded-lg text-center text-sm"/>
+                  <span className="text-sm text-stone-500">년</span>
+                  <div className="flex gap-1 flex-1 flex-wrap">
+                    {[1,2,3,4,5,6,7,8,9,10,11,12].map(m=>(
+                      <button key={m} onClick={()=>setRankingMonth(m)} className={`w-8 py-1.5 rounded-lg text-xs font-medium border ${rankingMonth===m?'bg-emerald-800 text-white border-emerald-800':'bg-white text-stone-600 border-stone-200'}`}>{m}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {rankingPeriod==='year'&&(
+                <div className="flex gap-2 items-center">
+                  <input type="number" value={rankingYear} onChange={e=>setRankingYear(parseInt(e.target.value))} className="w-20 px-2 py-1.5 border border-stone-300 rounded-lg text-center text-sm"/>
+                  <span className="text-sm text-stone-500">년 전체</span>
+                </div>
+              )}
+              <div className="text-xs text-stone-400">
+                {rankingPeriod==='quarter'&&`${rankingYear}년 ${rankingQuarter}분기 · `}
+                {rankingPeriod==='month'&&`${rankingYear}년 ${rankingMonth}월 · `}
+                {rankingPeriod==='year'&&`${rankingYear}년 전체 · `}
+                {rankingPeriod==='all'&&'전체 기간 · '}
+                {stats.filter(s=>s.rankedTotal>0).length}명 집계 · {getRankingFilteredMatches().filter(m=>isRanked(m.matchType)).length}경기
+              </div>
+            </div>
+
             {stats.length===0?<EmptyState icon={Trophy} title="아직 멤버가 없습니다" desc="멤버를 추가하고 경기를 기록해보세요"/>:(
               <>
                 {stats.filter(s=>s.rankedTotal>0).length>=3&&(
@@ -1471,10 +1547,18 @@ export default function App() {
         {activeTab==='analysis'&&(
           <div className="space-y-4">
             <div className="flex gap-2">
-              <button onClick={()=>setAnalysisPeriod('all')} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${analysisPeriod==='all'?'bg-emerald-800 text-white border-emerald-800':'bg-white text-stone-600 border-stone-200'}`}>전체 기간</button>
-              <button onClick={()=>setAnalysisPeriod('year')} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${analysisPeriod==='year'?'bg-emerald-800 text-white border-emerald-800':'bg-white text-stone-600 border-stone-200'}`}>{currentYear}년</button>
+              {[['all','전체'],['year',`${currentYear}년`],['quarter','분기']].map(([v,l])=>(
+                <button key={v} onClick={()=>setAnalysisPeriod(v)} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${analysisPeriod===v?'bg-emerald-800 text-white border-emerald-800':'bg-white text-stone-600 border-stone-200'}`}>{l}</button>
+              ))}
             </div>
-            <div className="text-xs text-stone-400 px-1">※ 남복·여복·혼복 기준 · {filteredMatches.length}경기</div>
+            {analysisPeriod==='quarter'&&(
+              <div className="flex gap-1">
+                {[1,2,3,4].map(q=>(
+                  <button key={q} onClick={()=>setAnalysisQuarter(q)} className={`flex-1 py-1.5 rounded-lg text-xs font-medium border ${analysisQuarter===q?'bg-emerald-800 text-white border-emerald-800':'bg-white text-stone-600 border-stone-200'}`}>{q}분기</button>
+                ))}
+              </div>
+            )}
+            <div className="text-xs text-stone-400 px-1">※ 남복·여복·혼복 기준 · {filteredMatches.length}경기{analysisPeriod==='quarter'?` (${currentYear}년 ${analysisQuarter}분기)`:''}</div>
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
               {[{id:'partner',label:'🤝 파트너'},{id:'matchup',label:'⚔️ 매치업'},{id:'synergy',label:'✨ 시너지'},{id:'position',label:'🎾 포/백'}].map(s=>(
                 <button key={s.id} onClick={()=>setAnalysisSection(s.id)} className={`flex-1 py-2 rounded-md text-xs font-medium ${analysisSection===s.id?'bg-white text-stone-800 shadow-sm':'text-stone-500'}`}>{s.label}</button>
@@ -2017,7 +2101,10 @@ export default function App() {
             <div><label className="block text-xs font-medium text-stone-600 mb-1.5">경기일</label><input type="date" value={matchDate} onChange={e=>setMatchDate(e.target.value)} className="w-full px-3 py-2.5 border border-stone-300 rounded-lg"/></div>
             {currentMatchType&&<div className={`text-center text-sm font-bold py-2 rounded-lg ${getMatchTypeLabel(currentMatchType).color}`}>{getMatchTypeLabel(currentMatchType).label}{!isRanked(currentMatchType)&&' · 랭킹 미반영'}</div>}
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-              <label className="text-xs font-bold text-emerald-800 mb-2 block">🏆 팀 A</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-emerald-800">🏆 팀 A</label>
+                <button onClick={()=>{const t=teamA1;setTeamA1(teamA2);setTeamA2(t);}} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-medium">포↔백</button>
+              </div>
               <div className="flex gap-2 mb-2">
                 <MemberSelect value={teamA1} onChange={setTeamA1} label="선택" posLabel="포 🟦" exclude={[teamA2,teamB1,teamB2].filter(Boolean)}/>
                 <MemberSelect value={teamA2} onChange={setTeamA2} label="선택" posLabel="백 🟧" exclude={[teamA1,teamB1,teamB2].filter(Boolean)}/>
@@ -2025,7 +2112,10 @@ export default function App() {
               {!isScheduledMode&&<input type="number" min="0" value={scoreA} onChange={e=>setScoreA(e.target.value)} placeholder="팀 A 점수" className="w-full px-3 py-2 border border-stone-300 rounded-lg text-center font-mono text-lg"/>}
             </div>
             <div className="bg-stone-50 border border-stone-200 rounded-lg p-3">
-              <label className="text-xs font-bold text-stone-600 mb-2 block">팀 B</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-stone-600">팀 B</label>
+                <button onClick={()=>{const t=teamB1;setTeamB1(teamB2);setTeamB2(t);}} className="text-xs bg-stone-200 text-stone-600 px-2 py-1 rounded font-medium">포↔백</button>
+              </div>
               <div className="flex gap-2 mb-2">
                 <MemberSelect value={teamB1} onChange={setTeamB1} label="선택" posLabel="포 🟦" exclude={[teamA1,teamA2,teamB2].filter(Boolean)}/>
                 <MemberSelect value={teamB2} onChange={setTeamB2} label="선택" posLabel="백 🟧" exclude={[teamA1,teamA2,teamB1].filter(Boolean)}/>
