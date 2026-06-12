@@ -961,23 +961,29 @@ export default function App() {
     }
 
     // 3. 전체 플레이어 맵 (정확매칭 + 유사매칭 + 게스트)
-    await loadGuests();
-    const freshGuests = dateGuests[date] || [];
+    // DB에서 직접 읽어오기 (state 업데이트 타이밍 문제 방지)
+    const { data: freshGuestData } = await supabase.from('date_guests').select('*').eq('attend_date', date);
+    const freshGuests = (freshGuestData || []).map(g => ({ id: g.id, name: g.name, gender: g.gender, originalName: g.original_name }));
+    await loadGuests(); // state도 업데이트
+
     const allPlayerMap = {};
-    // 정확 이름
     members.forEach(m => { allPlayerMap[m.name] = { id: m.id, gender: m.gender }; });
-    // 유사 매칭 (입력된 이름 → 실제 멤버)
     if (matched) matched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
     if (fuzzyMatched) fuzzyMatched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
-    // 게스트 - g.name(남게스트1 등)과 originalName 모두 등록
     freshGuests.forEach(g => {
       allPlayerMap[g.name] = { id: g.id, gender: g.gender };
       if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender };
+      // 남게스트1 → 남게스트 prefix도 등록 (첫 번째)
+      const prefix = g.gender === 'M' ? '남게스트' : '여게스트';
+      if (!allPlayerMap[prefix]) allPlayerMap[prefix] = { id: g.id, gender: g.gender };
     });
     uniqueGuestNames.forEach(name => {
       if (guestIdMap[name]) {
         const gender = getGuestGender(guestIdMap[name]);
         allPlayerMap[name] = { id: guestIdMap[name], gender };
+        // 정규화된 이름도 등록
+        const normalized = normalizeGuestName(name);
+        if (normalized !== name) allPlayerMap[normalized] = { id: guestIdMap[name], gender };
       }
     });
 
@@ -1050,7 +1056,7 @@ export default function App() {
 
   const allStats = getStats(); // 전체 (분석탭용)
   const rankingStats = getStats(getRankingFilteredMatches()); // 기간 필터 (랭킹탭용)
-  const stats = [...rankingStats].sort((a,b)=>b.winRate-a.winRate||b.rankedWins-a.rankedWins||(b.gamesWon-b.gamesLost)-(a.gamesWon-a.gamesLost));
+  const stats = [...rankingStats].sort((a,b)=>b.winRate-a.winRate||b.rankedWins-a.rankedWins||(b.gamesWon-b.gamesLost)-(a.gamesWon-a.gamesLost)||b.attendanceCount-a.attendanceCount);
 
   const getSortedFilteredStats = () => {
     let r=[...allStats];
@@ -1298,9 +1304,21 @@ export default function App() {
                                 <span className={`truncate ${attended?getGenderColor(m.gender):''}`}>{m.name}</span>
                                 {(() => {
                                   const dayStat = getDayStats(selectedDate).find(s => s.id === m.id);
-                                  if (!dayStat || dayStat.total === 0) return <span className={`text-xs px-1 rounded ml-auto flex-shrink-0 ${getGenderBadge(m.gender)}`}>{m.gender==='M'?'남':'여'}</span>;
+                                  // 예정 경기 수 (점수 없는 대진)
+                                  const scheduledCount = selectedDateMatches.filter(match =>
+                                    match.isScheduled && [match.teamA1,match.teamA2,match.teamB1,match.teamB2].includes(m.id)
+                                  ).length;
+                                  if (!dayStat || dayStat.total === 0) {
+                                    return (
+                                      <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
+                                        {scheduledCount > 0 && <span className="text-xs bg-orange-100 text-orange-600 px-1 py-0.5 rounded font-bold">{scheduledCount}경기</span>}
+                                        {scheduledCount === 0 && <span className={`text-xs px-1 rounded ${getGenderBadge(m.gender)}`}>{m.gender==='M'?'남':'여'}</span>}
+                                      </div>
+                                    );
+                                  }
                                   return (
                                     <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
+                                      {scheduledCount > 0 && <span className="text-xs bg-orange-100 text-orange-600 px-1 py-0.5 rounded font-bold">+{scheduledCount}</span>}
                                       {dayStat.wins > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded font-bold">{dayStat.wins}승</span>}
                                       {dayStat.draws > 0 && <span className="text-xs bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">{dayStat.draws}무</span>}
                                       {dayStat.losses > 0 && <span className="text-xs bg-red-100 text-red-600 px-1 py-0.5 rounded font-bold">{dayStat.losses}패</span>}
@@ -1515,9 +1533,21 @@ export default function App() {
                     <div className="text-xs text-stone-400">남복·혼복·여복만 반영</div>
                   </div>
                   <div className="divide-y divide-stone-100">
-                    {stats.map((player,idx)=>(
+                    {stats.map((player,idx)=>{
+                      // 동점 체크: 앞 사람과 winRate, rankedWins, gamesWon-gamesLost, attendanceCount 모두 같으면 동점
+                      const prev = stats[idx-1];
+                      const isTie = prev && prev.rankedTotal > 0 && player.rankedTotal > 0
+                        && prev.winRate.toFixed(1) === player.winRate.toFixed(1)
+                        && prev.rankedWins === player.rankedWins
+                        && (prev.gamesWon-prev.gamesLost) === (player.gamesWon-player.gamesLost)
+                        && prev.attendanceCount === player.attendanceCount;
+                      const rank = isTie ? (stats.slice(0,idx).findIndex((_,i)=>{
+                        const p=stats[i]; return !(p.winRate.toFixed(1)===player.winRate.toFixed(1)&&p.rankedWins===player.rankedWins&&(p.gamesWon-p.gamesLost)===(player.gamesWon-player.gamesLost)&&p.attendanceCount===player.attendanceCount);
+                      }) === -1 ? stats.findIndex(s=>s.winRate.toFixed(1)===player.winRate.toFixed(1)&&s.rankedWins===player.rankedWins&&(s.gamesWon-s.gamesLost)===(player.gamesWon-player.gamesLost)&&s.attendanceCount===player.attendanceCount)+1 : idx) : idx+1;
+                      const displayRank = isTie ? `${rank}=` : `${idx+1}`;
+                      return(
                       <div key={player.id} className="px-4 py-3 flex items-center gap-2">
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${idx===0?'bg-yellow-100 text-yellow-700':idx===1?'bg-stone-100 text-stone-700':idx===2?'bg-amber-100 text-amber-700':'bg-stone-50 text-stone-500'}`}>{idx+1}</div>
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${idx===0?'bg-yellow-100 text-yellow-700':idx===1?'bg-stone-100 text-stone-700':idx===2?'bg-amber-100 text-amber-700':'bg-stone-50 text-stone-500'}`}>{displayRank}</div>
                         <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm flex-shrink-0 ${player.gender==='M'?'bg-blue-100 text-blue-700':'bg-pink-100 text-pink-600'}`}>{player.gender==='M'?'♂':'♀'}</div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">{player.isPresident&&<Crown size={13} className="text-yellow-500"/>}<span className={`font-semibold truncate ${getGenderColor(player.gender)}`}>{player.name}</span><span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${player.member_type==='regular'?'bg-emerald-100 text-emerald-700':'bg-stone-100 text-stone-500'}`}>{player.member_type==='regular'?'정':'준'}</span></div>
@@ -1525,7 +1555,8 @@ export default function App() {
                         </div>
                         <div className="text-right"><div className="text-xl font-bold text-emerald-700">{player.rankedTotal===0?'-':`${player.winRate.toFixed(1)}%`}</div><div className="text-xs text-stone-400">승률</div></div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
                 {stats.some(s=>s.rankedTotal>0||s.attendanceCount>0)&&(
