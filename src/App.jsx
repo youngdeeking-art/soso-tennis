@@ -1308,20 +1308,17 @@ export default function App() {
                                   const scheduledCount = selectedDateMatches.filter(match =>
                                     match.isScheduled && [match.teamA1,match.teamA2,match.teamB1,match.teamB2].includes(m.id)
                                   ).length;
-                                  if (!dayStat || dayStat.total === 0) {
-                                    return (
-                                      <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
-                                        {scheduledCount > 0 && <span className="text-xs bg-orange-100 text-orange-600 px-1 py-0.5 rounded font-bold">{scheduledCount}경기</span>}
-                                        {scheduledCount === 0 && <span className={`text-xs px-1 rounded ${getGenderBadge(m.gender)}`}>{m.gender==='M'?'남':'여'}</span>}
-                                      </div>
-                                    );
+                                  const totalPlayed = dayStat ? dayStat.total : 0;
+                                  const totalGames = totalPlayed + scheduledCount;
+                                  if (totalGames === 0) {
+                                    return <span className={`text-xs px-1 rounded ml-auto flex-shrink-0 ${getGenderBadge(m.gender)}`}>{m.gender==='M'?'남':'여'}</span>;
                                   }
                                   return (
-                                    <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
-                                      {scheduledCount > 0 && <span className="text-xs bg-orange-100 text-orange-600 px-1 py-0.5 rounded font-bold">+{scheduledCount}</span>}
-                                      {dayStat.wins > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded font-bold">{dayStat.wins}승</span>}
-                                      {dayStat.draws > 0 && <span className="text-xs bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">{dayStat.draws}무</span>}
-                                      {dayStat.losses > 0 && <span className="text-xs bg-red-100 text-red-600 px-1 py-0.5 rounded font-bold">{dayStat.losses}패</span>}
+                                    <div className="flex items-center gap-0.5 ml-auto flex-shrink-0 flex-wrap justify-end">
+                                      <span className="text-xs bg-stone-100 text-stone-600 px-1 py-0.5 rounded font-bold">{totalGames}전</span>
+                                      {dayStat && dayStat.wins > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded font-bold">{dayStat.wins}승</span>}
+                                      {dayStat && dayStat.draws > 0 && <span className="text-xs bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">{dayStat.draws}무</span>}
+                                      {dayStat && dayStat.losses > 0 && <span className="text-xs bg-red-100 text-red-600 px-1 py-0.5 rounded font-bold">{dayStat.losses}패</span>}
                                     </div>
                                   );
                                 })()}
@@ -2260,7 +2257,7 @@ function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTa
           :match.confirmed?<span className="text-xs text-blue-600 flex items-center gap-0.5"><Lock size={10}/>확정</span>
           :<span className="text-xs text-stone-400">미확정</span>}
         <div className="flex-1"></div>
-        {!selectMode&&!editOrderMode&&!swapMode&&match.isScheduled&&<button onClick={e=>{e.stopPropagation();openScoreModal(match);}} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-medium">점수입력</button>}
+
         {!selectMode&&!editOrderMode&&!swapMode&&!match.confirmed&&<button onClick={e=>{e.stopPropagation();openEditMatch(match);}} className="text-stone-400 p-1"><Pencil size={13}/></button>}
         {!selectMode&&!editOrderMode&&!swapMode&&<button onClick={e=>{e.stopPropagation();deleteMatch(match);}} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
       </div>
@@ -2279,7 +2276,12 @@ function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTa
           )}
           {swapMode && <button onClick={e=>{e.stopPropagation();swapPoBack(match,'A');}} className="text-xs bg-stone-100 text-stone-500 px-2 py-0.5 rounded mt-0.5">A 포↔백</button>}
         </div>
-        {match.isScheduled?<div className="font-mono text-stone-400 bg-stone-100 px-2 py-1 rounded text-sm flex-shrink-0">vs</div>:
+        {match.isScheduled?(
+          <button onClick={e=>{e.stopPropagation();if(!selectMode&&!editOrderMode)openScoreModal(match);}}
+            className="flex-shrink-0 bg-emerald-600 text-white text-xs font-bold px-2.5 py-2 rounded-lg leading-tight text-center shadow-sm active:bg-emerald-700">
+            점수<br/>입력
+          </button>
+        ):(
           <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA}-{match.scoreB}</div>}
         <div className={`flex-1 min-w-0 space-y-1 text-right ${!match.isScheduled&&!draw&&match.scoreB>match.scoreA?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
           {swapMode ? (
