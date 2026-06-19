@@ -855,8 +855,7 @@ export default function App() {
     if (found) return found;
     found = members.find(m => normalizeName(m.name) === normalized);
     if (found) return found;
-    found = members.find(m => m.name.includes(normalized) || normalized.includes(m.name));
-    return found || null;
+    return null;
   };
 
   // 이름이 게스트인지 확인 (남게스트1, 남게스트2, 여게스트1 등)
@@ -949,11 +948,6 @@ export default function App() {
       teamB: m.teamB.map(n => isGuestName(n) ? normalizeGuestName(n) : n),
     }));
 
-    // DEBUG
-    const debugNames = [];
-    normalizedMatchList.forEach(m => [...m.teamA, ...m.teamB].forEach(n => debugNames.push(`"${n}"(len:${n.length},guest:${isGuestName(n)})`)));
-    alert('[DEBUG]\n' + debugNames.slice(0,12).join('\n'));
-
     // 1. 참석자 저장 (정확 매칭 + 유사 매칭)
     const allMatchedMembers = [...(matched || []).map(x => x.member), ...(fuzzyMatched || []).map(x => x.member)];
     const memberIds = [...new Set(allMatchedMembers.map(m => m.id))];
@@ -1012,7 +1006,7 @@ export default function App() {
         id: guestId, attend_date: date, name: displayName, gender, original_name: name, guest_order: existingGuests.length + i + 1
       });
       if (!error) guestIdMap[name] = guestId;
-      else console.error('게스트 저장 실패:', error);
+      else { console.error('게스트 저장 실패:', error); alert(`게스트 "${name}" 저장 실패: ${error.message}`); }
     }
 
     // 3. 전체 플레이어 맵 (DB에서 직접 읽어와서 타이밍 문제 방지)
