@@ -835,7 +835,7 @@ export default function App() {
 
       if (section === 'match' && currentMatch) {
         if (line === 'vs' || line === 'VS') { currentMatch.side = 'B'; continue; }
-        line.split(/[,،、]/).map(n => n.trim()).filter(Boolean).forEach(name => {
+        line.split(/[,،、/]/).map(n => n.trim()).filter(Boolean).forEach(name => {
           const cn = cleanName(name);
           if (currentMatch.side === 'A') currentMatch.teamA.push(cn);
           else currentMatch.teamB.push(cn);
