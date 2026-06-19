@@ -929,7 +929,6 @@ export default function App() {
   const applyImport = async (date, preview) => {
     if (!preview) return;
     const { matched, fuzzyMatched, guestNames, matchList } = preview;
-    alert(`[DEBUG] matched:${matched?.length||0} fuzzy:${fuzzyMatched?.length||0} guest:${guestNames?.length||0} matches:${matchList?.length||0}`);
 
     // 1. 참석자 저장 (정확 매칭 + 유사 매칭)
     const allMatchedMembers = [...(matched || []).map(x => x.member), ...(fuzzyMatched || []).map(x => x.member)];
@@ -937,21 +936,33 @@ export default function App() {
     const current = attendance[date] || [];
     for (const id of memberIds.filter(id => !current.includes(id))) await supabase.from('attendance').insert({ attend_date: date, member_id: id });
 
-    // 2. 게스트 추가 - 중복 없이 DB에 저장
+    // 1-1. 경기에 등장하는 모든 이름 중 멤버와 매칭되는 것도 참석자로 추가
+    const allNamesInMatches = new Set();
+    matchList.forEach(m => [...m.teamA, ...m.teamB].forEach(n => allNamesInMatches.add(n)));
+    const extraMemberIds = [];
+    allNamesInMatches.forEach(name => {
+      if (isGuestName(name)) return;
+      const found = members.find(m => m.name === name) || findMemberByName(name);
+      if (found && !memberIds.includes(found.id)) extraMemberIds.push(found.id);
+    });
+    const allFinalMemberIds = [...new Set([...memberIds, ...extraMemberIds])];
+    for (const id of extraMemberIds.filter(id => !current.includes(id))) await supabase.from('attendance').insert({ attend_date: date, member_id: id });
+
+    // 2. 게스트 추가 - 경기에 등장하는 게스트 이름도 모두 포함
     const existingGuests = dateGuests[date] || [];
     const guestIdMap = {};
-    const uniqueGuestNames = [...new Set(guestNames)];
+    const allGuestNamesSet = new Set(guestNames || []);
+    allNamesInMatches.forEach(name => { if (isGuestName(name)) allGuestNamesSet.add(name); });
+    const uniqueGuestNames = [...allGuestNamesSet];
 
     for (let i = 0; i < uniqueGuestNames.length; i++) {
       const name = uniqueGuestNames[i];
-      // 기존 게스트에서 이름 또는 originalName으로 찾기
       const existing = existingGuests.find(g => g.originalName === name || g.name === name);
       if (existing) { guestIdMap[name] = existing.id; continue; }
-      // 멤버 목록에서 성별 추정, 게스트 이름이면 이름으로 성별 추정
       const knownMember = members.find(m => m.name === name);
-      const gender = knownMember ? knownMember.gender : isGuestName(name) ? getGuestGenderFromName(name) : 'M';
-      const currentGuests = [...existingGuests, ...Object.values(guestIdMap).map(id => ({ id, gender }))];
-      const sameGenderCount = existingGuests.filter(g => g.gender === gender).length + Object.values(guestIdMap).filter(id => getGuestGender(id) === gender).length;
+      const gender = knownMember ? knownMember.gender : (isGuestName(name) ? getGuestGenderFromName(name) : 'M');
+      const sameGenderCount = existingGuests.filter(g => g.gender === gender).length +
+        Object.keys(guestIdMap).filter(n => getGuestGenderFromName(n) === gender).length;
       const num = sameGenderCount + 1;
       const guestName = gender === 'M' ? `남게스트${num}` : `여게스트${num}`;
       const guestId = `guest_${date}_${gender}_${Date.now() + i}`;
@@ -959,64 +970,59 @@ export default function App() {
         id: guestId, attend_date: date, name: guestName, gender, original_name: name, guest_order: existingGuests.length + i + 1
       });
       if (!error) guestIdMap[name] = guestId;
+      else console.error('게스트 저장 실패:', error);
     }
 
-    // 3. 전체 플레이어 맵 (정확매칭 + 유사매칭 + 게스트)
-    // DB에서 직접 읽어오기 (state 업데이트 타이밍 문제 방지)
+    // 3. 전체 플레이어 맵 (DB에서 직접 읽어와서 타이밍 문제 방지)
     const { data: freshGuestData } = await supabase.from('date_guests').select('*').eq('attend_date', date);
     const freshGuests = (freshGuestData || []).map(g => ({ id: g.id, name: g.name, gender: g.gender, originalName: g.original_name }));
-    await loadGuests(); // state도 업데이트
+    await loadGuests();
 
     const allPlayerMap = {};
     members.forEach(m => { allPlayerMap[m.name] = { id: m.id, gender: m.gender }; });
-    if (matched) matched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
-    if (fuzzyMatched) fuzzyMatched.forEach(x => { allPlayerMap[x.input] = { id: x.member.id, gender: x.member.gender }; });
+    allNamesInMatches.forEach(name => {
+      if (allPlayerMap[name] || isGuestName(name)) return;
+      const found = findMemberByName(name);
+      if (found) allPlayerMap[name] = { id: found.id, gender: found.gender };
+    });
     freshGuests.forEach(g => {
       allPlayerMap[g.name] = { id: g.id, gender: g.gender };
       if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender };
-      // 남게스트1 → 남게스트 prefix도 등록 (첫 번째)
-      const prefix = g.gender === 'M' ? '남게스트' : '여게스트';
-      if (!allPlayerMap[prefix]) allPlayerMap[prefix] = { id: g.id, gender: g.gender };
-    });
-    uniqueGuestNames.forEach(name => {
-      if (guestIdMap[name]) {
-        const gender = getGuestGender(guestIdMap[name]);
-        allPlayerMap[name] = { id: guestIdMap[name], gender };
-        // 정규화된 이름도 등록
-        const normalized = normalizeGuestName(name);
-        if (normalized !== name) allPlayerMap[normalized] = { id: guestIdMap[name], gender };
-      }
     });
 
     // 4. 대진 등록
-    let insertedCount = 0;
+    let insertedCount = 0, skippedCount = 0;
     for (let i = 0; i < matchList.length; i++) {
       const match = matchList[i];
       const [a1n, a2n] = match.teamA, [b1n, b2n] = match.teamB;
       const a1 = allPlayerMap[a1n], a2 = allPlayerMap[a2n], b1 = allPlayerMap[b1n], b2 = allPlayerMap[b2n];
-      if (!a1 || !a2 || !b1 || !b2) continue;
+      if (!a1 || !a2 || !b1 || !b2) { skippedCount++; continue; }
       const assignPos = (p1, p2) => {
         if (p1.gender === 'F' && p2.gender === 'M') return [p1.id, p2.id];
         if (p1.gender === 'M' && p2.gender === 'F') return [p2.id, p1.id];
         return [p1.id, p2.id];
       };
       const [ta1, ta2] = assignPos(a1, a2), [tb1, tb2] = assignPos(b1, b2);
-      const genders = [ta1, ta2, tb1, tb2].map(id => allPlayerMap[Object.keys(allPlayerMap).find(k => allPlayerMap[k].id === id)]?.gender || (id.startsWith('guest_') ? getGuestGender(id) : members.find(m => m.id === id)?.gender));
+      const idToGender = {};
+      [a1,a2,b1,b2].forEach(p => { idToGender[p.id] = p.gender; });
+      const genders = [ta1, ta2, tb1, tb2].map(id => idToGender[id]);
       const mC = genders.filter(g => g === 'M').length, fC = genders.filter(g => g === 'F').length;
       let matchType = 'JB';
       if (mC === 4) matchType = 'MB'; else if (fC === 4) matchType = 'FB'; else if (mC === 2 && fC === 2) matchType = 'MX';
-      await supabase.from('matches').insert({
+      const { error: insErr } = await supabase.from('matches').insert({
         id: `${Date.now()}_${i}`, team_a1: ta1, team_a2: ta2, team_b1: tb1, team_b2: tb2,
         score_a: null, score_b: null, match_date: date, confirmed: false,
         match_type: matchType, is_draw: false, is_scheduled: true,
         match_order: matches.filter(m => m.date === date).length + insertedCount + 1
       });
+      if (insErr) { console.error('경기 등록 실패:', insErr); skippedCount++; continue; }
       insertedCount++;
     }
     await loadAll();
     setShowImportModal(false); setImportText(''); setImportPreview(null);
-    alert(`완료! 참석자 ${memberIds.length}명, 게스트 ${uniqueGuestNames.length}명, 대진 ${insertedCount}경기 등록됐어요!`);
+    alert(`완료! 참석자 ${allFinalMemberIds.length}명, 게스트 ${uniqueGuestNames.length}명, 대진 ${insertedCount}경기 등록${skippedCount>0?` (${skippedCount}경기 매칭 실패)`:''}!`);
   };
+
 
   const getGenderColor = (g) => g === 'M' ? 'text-blue-600' : 'text-pink-500';
   const getGenderBg = (g) => g === 'M' ? 'bg-blue-50 border-blue-200' : 'bg-pink-50 border-pink-200';
@@ -2283,7 +2289,8 @@ function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTa
             점수<br/>입력
           </button>
         ):(
-          <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA}-{match.scoreB}</div>}
+          <div className={`font-mono font-bold px-2 py-1 rounded border text-sm flex-shrink-0 ${draw?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-white border-stone-200 text-stone-700'}`}>{match.scoreA}-{match.scoreB}</div>
+        )}
         <div className={`flex-1 min-w-0 space-y-1 text-right ${!match.isScheduled&&!draw&&match.scoreB>match.scoreA?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
           {swapMode ? (
             <>
