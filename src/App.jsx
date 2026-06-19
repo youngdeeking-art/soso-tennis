@@ -929,6 +929,7 @@ export default function App() {
   const applyImport = async (date, preview) => {
     if (!preview) return;
     const { matched, fuzzyMatched, guestNames, matchList } = preview;
+    alert(`[DEBUG] matched:${matched?.length||0} fuzzy:${fuzzyMatched?.length||0} guest:${guestNames?.length||0} matches:${matchList?.length||0}`);
 
     // 1. 참석자 저장 (정확 매칭 + 유사 매칭)
     const allMatchedMembers = [...(matched || []).map(x => x.member), ...(fuzzyMatched || []).map(x => x.member)];
