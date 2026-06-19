@@ -949,6 +949,11 @@ export default function App() {
       teamB: m.teamB.map(n => isGuestName(n) ? normalizeGuestName(n) : n),
     }));
 
+    // DEBUG
+    const debugNames = [];
+    normalizedMatchList.forEach(m => [...m.teamA, ...m.teamB].forEach(n => debugNames.push(`"${n}"(len:${n.length},guest:${isGuestName(n)})`)));
+    alert('[DEBUG]\n' + debugNames.slice(0,12).join('\n'));
+
     // 1. 참석자 저장 (정확 매칭 + 유사 매칭)
     const allMatchedMembers = [...(matched || []).map(x => x.member), ...(fuzzyMatched || []).map(x => x.member)];
     const memberIds = [...new Set(allMatchedMembers.map(m => m.id))];
