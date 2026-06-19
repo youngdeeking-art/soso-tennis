@@ -868,9 +868,21 @@ export default function App() {
     const n = name.trim();
     return (n.startsWith('여게스트') || n.startsWith('여자게스트')) ? 'F' : 'M';
   };
-  // 남자게스트1 → 남게스트1 정규화
+  // 남자게스트1 → 남게스트1 정규화, 숫자 없으면 1 부여
   const normalizeGuestName = (name) => {
-    return name.replace(/^남자게스트/, '남게스트').replace(/^여자게스트/, '여게스트');
+    let r = name.replace(/^남자게스트/, '남게스트').replace(/^여자게스트/, '여게스트');
+    if (/^(남게스트|여게스트)$/.test(r.trim())) r = r.trim() + '1';
+    return r;
+  };
+  // 모르는 이름의 성별을 경기 포지션에서 추정 (혼복: 포=여자, 백=남자)
+  const guessGenderFromPosition = (name, matchList) => {
+    for (const m of matchList) {
+      const aIdx = m.teamA.indexOf(name);
+      const bIdx = m.teamB.indexOf(name);
+      if (aIdx === 0 || bIdx === 0) return 'F'; // 포 위치(첫번째) → 여자로 추정 (혼복 관례)
+      if (aIdx === 1 || bIdx === 1) return 'M'; // 백 위치(두번째) → 남자로 추정
+    }
+    return 'M';
   };
   // 게스트 이름으로 DB 게스트 찾기 (남게스트1 → 해당 날짜의 남게스트1)
   const findGuestByName = (name, date) => {
@@ -928,7 +940,14 @@ export default function App() {
 
   const applyImport = async (date, preview) => {
     if (!preview) return;
-    const { matched, fuzzyMatched, guestNames, matchList } = preview;
+    const { matched, fuzzyMatched, matchList } = preview;
+
+    // 0. matchList의 모든 이름을 정규화 (남게스트 → 남게스트1 등)
+    const normalizedMatchList = matchList.map(m => ({
+      ...m,
+      teamA: m.teamA.map(n => isGuestName(n) ? normalizeGuestName(n) : n),
+      teamB: m.teamB.map(n => isGuestName(n) ? normalizeGuestName(n) : n),
+    }));
 
     // 1. 참석자 저장 (정확 매칭 + 유사 매칭)
     const allMatchedMembers = [...(matched || []).map(x => x.member), ...(fuzzyMatched || []).map(x => x.member)];
@@ -938,7 +957,7 @@ export default function App() {
 
     // 1-1. 경기에 등장하는 모든 이름 중 멤버와 매칭되는 것도 참석자로 추가
     const allNamesInMatches = new Set();
-    matchList.forEach(m => [...m.teamA, ...m.teamB].forEach(n => allNamesInMatches.add(n)));
+    normalizedMatchList.forEach(m => [...m.teamA, ...m.teamB].forEach(n => allNamesInMatches.add(n)));
     const extraMemberIds = [];
     allNamesInMatches.forEach(name => {
       if (isGuestName(name)) return;
@@ -948,26 +967,44 @@ export default function App() {
     const allFinalMemberIds = [...new Set([...memberIds, ...extraMemberIds])];
     for (const id of extraMemberIds.filter(id => !current.includes(id))) await supabase.from('attendance').insert({ attend_date: date, member_id: id });
 
-    // 2. 게스트 추가 - 경기에 등장하는 게스트 이름도 모두 포함
+    // 2. 게스트 추가 - 명시적 게스트 이름 + 매칭 안 되는 모르는 이름도 자동으로 게스트 처리
     const existingGuests = dateGuests[date] || [];
     const guestIdMap = {};
-    const allGuestNamesSet = new Set(guestNames || []);
-    allNamesInMatches.forEach(name => { if (isGuestName(name)) allGuestNamesSet.add(name); });
-    const uniqueGuestNames = [...allGuestNamesSet];
+    const guestNamesToCreate = new Set();
+
+    allNamesInMatches.forEach(name => {
+      if (isGuestName(name)) { guestNamesToCreate.add(name); return; }
+      // 멤버로도 못 찾고 게스트 이름도 아니면 → 알 수 없는 이름 → 자동 게스트 처리
+      const found = members.find(m => m.name === name) || findMemberByName(name);
+      if (!found) guestNamesToCreate.add(name);
+    });
+
+    const uniqueGuestNames = [...guestNamesToCreate];
+    let autoGuestCount = 0;
 
     for (let i = 0; i < uniqueGuestNames.length; i++) {
       const name = uniqueGuestNames[i];
       const existing = existingGuests.find(g => g.originalName === name || g.name === name);
       if (existing) { guestIdMap[name] = existing.id; continue; }
-      const knownMember = members.find(m => m.name === name);
-      const gender = knownMember ? knownMember.gender : (isGuestName(name) ? getGuestGenderFromName(name) : 'M');
+
+      let gender, displayName;
+      if (isGuestName(name)) {
+        gender = getGuestGenderFromName(name);
+      } else {
+        // 알 수 없는 이름 → 경기 내 포지션으로 성별 추정
+        gender = guessGenderFromPosition(name, normalizedMatchList);
+        autoGuestCount++;
+      }
       const sameGenderCount = existingGuests.filter(g => g.gender === gender).length +
-        Object.keys(guestIdMap).filter(n => getGuestGenderFromName(n) === gender).length;
+        Object.keys(guestIdMap).filter(n => {
+          const gg = isGuestName(n) ? getGuestGenderFromName(n) : guessGenderFromPosition(n, normalizedMatchList);
+          return gg === gender;
+        }).length;
       const num = sameGenderCount + 1;
-      const guestName = gender === 'M' ? `남게스트${num}` : `여게스트${num}`;
+      displayName = gender === 'M' ? `남게스트${num}` : `여게스트${num}`;
       const guestId = `guest_${date}_${gender}_${Date.now() + i}`;
       const { error } = await supabase.from('date_guests').insert({
-        id: guestId, attend_date: date, name: guestName, gender, original_name: name, guest_order: existingGuests.length + i + 1
+        id: guestId, attend_date: date, name: displayName, gender, original_name: name, guest_order: existingGuests.length + i + 1
       });
       if (!error) guestIdMap[name] = guestId;
       else console.error('게스트 저장 실패:', error);
@@ -990,10 +1027,10 @@ export default function App() {
       if (g.originalName) allPlayerMap[g.originalName] = { id: g.id, gender: g.gender };
     });
 
-    // 4. 대진 등록
+    // 4. 대진 등록 (정규화된 이름 기준)
     let insertedCount = 0, skippedCount = 0;
-    for (let i = 0; i < matchList.length; i++) {
-      const match = matchList[i];
+    for (let i = 0; i < normalizedMatchList.length; i++) {
+      const match = normalizedMatchList[i];
       const [a1n, a2n] = match.teamA, [b1n, b2n] = match.teamB;
       const a1 = allPlayerMap[a1n], a2 = allPlayerMap[a2n], b1 = allPlayerMap[b1n], b2 = allPlayerMap[b2n];
       if (!a1 || !a2 || !b1 || !b2) { skippedCount++; continue; }
@@ -1020,8 +1057,9 @@ export default function App() {
     }
     await loadAll();
     setShowImportModal(false); setImportText(''); setImportPreview(null);
-    alert(`완료! 참석자 ${allFinalMemberIds.length}명, 게스트 ${uniqueGuestNames.length}명, 대진 ${insertedCount}경기 등록${skippedCount>0?` (${skippedCount}경기 매칭 실패)`:''}!`);
+    alert(`완료! 참석자 ${allFinalMemberIds.length}명, 게스트 ${uniqueGuestNames.length}명${autoGuestCount>0?` (자동인식 ${autoGuestCount}명)`:''}, 대진 ${insertedCount}경기 등록${skippedCount>0?` (${skippedCount}경기 매칭 실패)`:''}!`);
   };
+
 
 
   const getGenderColor = (g) => g === 'M' ? 'text-blue-600' : 'text-pink-500';
@@ -1812,7 +1850,7 @@ export default function App() {
                   {importPreview.matched?.length>0&&<div><span className="text-xs font-semibold text-emerald-600">✅ 정확 매칭 ({importPreview.matched.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.matched.map((x,i)=><span key={i} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{x.input}</span>)}</div></div>}
                   {importPreview.fuzzyMatched?.length>0&&<div><span className="text-xs font-semibold text-yellow-600">🔍 유사 매칭 ({importPreview.fuzzyMatched.length}) - 확인 필요</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.fuzzyMatched.map((x,i)=><span key={i} className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">{x.input} → {x.member.name}</span>)}</div></div>}
                   {importPreview.unmatched?.length>0&&<div><span className="text-xs font-semibold text-red-500">❌ 못 찾은 멤버 - 스킵 ({importPreview.unmatched.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.unmatched.map((n,i)=><span key={i} className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>}
-                  {importPreview.unknownInMatches?.length>0&&<div><span className="text-xs font-semibold text-orange-500">⚠️ 경기에 있는데 참석자 미등록: {importPreview.unknownInMatches.join(', ')}</span></div>}
+                  {importPreview.unknownInMatches?.length>0&&<div><span className="text-xs font-semibold text-blue-500">🤖 자동 게스트 처리될 이름: {importPreview.unknownInMatches.join(', ')}</span></div>}
                   {importPreview.guestNames?.length>0&&<div><span className="text-xs font-semibold text-blue-500">👤 게스트 ({importPreview.guestNames.length})</span><div className="flex flex-wrap gap-1 mt-1">{importPreview.guestNames.map((n,i)=><span key={i} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{n}</span>)}</div></div>}
                   <div><span className="text-xs font-semibold text-stone-500">🎾 대진 ({importPreview.matchList.length}경기)</span><div className="space-y-1 mt-1">{importPreview.matchList.map((m,i)=><div key={i} className="text-xs bg-white border border-stone-200 rounded px-2 py-1"><span className="text-stone-400 mr-1">{i+1}경기</span>{m.teamA.join('·')} vs {m.teamB.join('·')}</div>)}</div></div>
                 </div>
