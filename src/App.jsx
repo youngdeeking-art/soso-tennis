@@ -91,6 +91,9 @@ export default function App() {
   const [matches, setMatches] = useState([]);
   const [attendance, setAttendance] = useState({});
   const [officers, setOfficers] = useState([]);
+  const [memberGrades, setMemberGrades] = useState([]); // 분기별 등급
+  const [gradeYear, setGradeYear] = useState(new Date().getFullYear());
+  const [gradeQuarter, setGradeQuarter] = useState(Math.ceil((new Date().getMonth()+1)/3));
   const [attendanceConfirmed, setAttendanceConfirmed] = useState({});
   const [loading, setLoading] = useState(true);
 
@@ -261,14 +264,16 @@ export default function App() {
   const loadAll = async () => {
     try {
       setLoading(true);
-      const [{ data: m }, { data: mt }, { data: att }, { data: off }, { data: ac }] = await Promise.all([
+      const [{ data: m }, { data: mt }, { data: att }, { data: off }, { data: ac }, { data: mg }] = await Promise.all([
         supabase.from('members').select('*').order('created_at'),
         supabase.from('matches').select('*').order('match_order', { ascending: true }),
         supabase.from('attendance').select('*'),
         supabase.from('officers').select('*'),
         supabase.from('attendance_confirmed').select('*'),
+        supabase.from('member_grades').select('*'),
       ]);
       setMembers(m || []);
+      setMemberGrades(mg || []);
       setMatches((mt || []).map(x => ({
         id: x.id, teamA1: x.team_a1, teamA2: x.team_a2, teamB1: x.team_b1, teamB2: x.team_b2,
         scoreA: x.score_a, scoreB: x.score_b, date: x.match_date,
@@ -1061,6 +1066,23 @@ export default function App() {
 
 
 
+  // 특정 분기의 멤버 등급 가져오기 (없으면 members 테이블 기본값)
+  const getMemberGrade = (memberId, year, quarter) => {
+    const grade = memberGrades.find(g => g.member_id === memberId && g.year === year && g.quarter === quarter);
+    if (grade) return grade.member_type;
+    return members.find(m => m.id === memberId)?.member_type || 'regular';
+  };
+
+  // 분기 등급 저장
+  const saveMemberGrade = async (memberId, year, quarter, memberType) => {
+    await supabase.from('member_grades').upsert(
+      { member_id: memberId, year, quarter, member_type: memberType },
+      { onConflict: 'member_id,year,quarter' }
+    );
+    const { data } = await supabase.from('member_grades').select('*');
+    setMemberGrades(data || []);
+  };
+
   const getGenderColor = (g) => g === 'M' ? 'text-blue-600' : 'text-pink-500';
   const getGenderBg = (g) => g === 'M' ? 'bg-blue-50 border-blue-200' : 'bg-pink-50 border-pink-200';
   const getGenderBadge = (g) => g === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-600';
@@ -1103,13 +1125,16 @@ export default function App() {
   const stats = [...rankingStats].sort((a,b)=>b.winRate-a.winRate||b.rankedWins-a.rankedWins||(b.gamesWon-b.gamesLost)-(a.gamesWon-a.gamesLost)||b.attendanceCount-a.attendanceCount);
 
   const getSortedFilteredStats = () => {
-    let r=[...allStats];
-    if(memberFilter==='regular')r=r.filter(m=>m.member_type==='regular');
-    else if(memberFilter==='associate')r=r.filter(m=>m.member_type==='associate');
+    let r=[...allStats].map(m => ({
+      ...m,
+      currentGrade: getMemberGrade(m.id, currentYear, currentQuarter)
+    }));
+    if(memberFilter==='regular')r=r.filter(m=>m.currentGrade==='regular');
+    else if(memberFilter==='associate')r=r.filter(m=>m.currentGrade==='associate');
     if(memberSort==='name')r.sort((a,b)=>a.name.localeCompare(b.name,'ko'));
     else if(memberSort==='winRate')r.sort((a,b)=>b.winRate-a.winRate);
     else if(memberSort==='attendance')r.sort((a,b)=>b.attendanceCount-a.attendanceCount);
-    else if(memberSort==='type')r.sort((a,b)=>a.member_type===b.member_type?a.name.localeCompare(b.name,'ko'):a.member_type==='regular'?-1:1);
+    else if(memberSort==='type')r.sort((a,b)=>a.currentGrade===b.currentGrade?a.name.localeCompare(b.name,'ko'):a.currentGrade==='regular'?-1:1);
     return r;
   };
 
@@ -1788,6 +1813,36 @@ export default function App() {
                 </div>
               )}
             </div>
+            {/* 분기별 등급 관리 */}
+            <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-stone-100 flex items-center justify-between">
+                <div className="flex items-center gap-2"><Award size={15} className="text-emerald-600"/><h3 className="text-sm font-bold text-stone-800">분기별 등급 관리</h3></div>
+                <div className="flex items-center gap-1.5">
+                  <input type="number" value={gradeYear} onChange={e=>setGradeYear(parseInt(e.target.value))} className="w-16 px-2 py-1 border border-stone-300 rounded text-center text-xs"/>
+                  {[1,2,3,4].map(q=>(
+                    <button key={q} onClick={()=>setGradeQuarter(q)} className={`w-8 h-7 rounded text-xs font-medium ${gradeQuarter===q?'bg-emerald-700 text-white':'bg-stone-100 text-stone-600'}`}>{q}Q</button>
+                  ))}
+                </div>
+              </div>
+              <div className="divide-y divide-stone-100">
+                {members.map(m => {
+                  const grade = getMemberGrade(m.id, gradeYear, gradeQuarter);
+                  return (
+                    <div key={m.id} className="px-4 py-2.5 flex items-center gap-3">
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${m.gender==='M'?'bg-blue-100 text-blue-700':'bg-pink-100 text-pink-600'}`}>{m.name.charAt(0)}</div>
+                      <span className="flex-1 text-sm font-medium text-stone-800">{m.name}</span>
+                      <div className="flex rounded-lg border border-stone-200 overflow-hidden">
+                        <button onClick={async()=>{if(!checkPassword())return;await saveMemberGrade(m.id,gradeYear,gradeQuarter,'regular');}}
+                          className={`px-3 py-1.5 text-xs font-medium transition-all ${grade==='regular'?'bg-emerald-600 text-white':'bg-white text-stone-500 hover:bg-stone-50'}`}>정회원</button>
+                        <button onClick={async()=>{if(!checkPassword())return;await saveMemberGrade(m.id,gradeYear,gradeQuarter,'associate');}}
+                          className={`px-3 py-1.5 text-xs font-medium transition-all ${grade==='associate'?'bg-stone-500 text-white':'bg-white text-stone-500 hover:bg-stone-50'}`}>준회원</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             {officers.length>0&&(
               <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
                 <div className="px-4 py-3 border-b border-stone-100 flex items-center gap-2"><Crown size={15} className="text-yellow-500"/><h3 className="text-sm font-bold text-stone-800">역대 회장</h3></div>
