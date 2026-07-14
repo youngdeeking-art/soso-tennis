@@ -327,6 +327,7 @@ export default function App() {
   const isPast = (dateStr) => dateStr < today;
 
   const checkPassword = () => {
+    if (isAdmin) return true; // 관리자 모드면 비번 스킵
     const pw = prompt('비밀번호를 입력하세요:');
     if (pw !== DELETE_PASSWORD) { alert('비밀번호가 틀렸습니다.'); return false; }
     return true;
@@ -1274,49 +1275,84 @@ export default function App() {
     );
   };
 
-  if(loading) return <div className="min-h-screen bg-stone-50 flex items-center justify-center"><div className="text-stone-400 tracking-widest text-sm">LOADING...</div></div>;
+  if(loading) return (
+    <div className="min-h-screen bg-gradient-to-br from-emerald-800 via-emerald-700 to-emerald-900 flex flex-col items-center justify-center gap-6">
+      <img src="/icon-192.png" alt="소소테니스" className="w-28 h-28 rounded-3xl shadow-2xl animate-pulse"/>
+      <div className="text-center">
+        <div className="text-white text-2xl font-bold tracking-tight">소소테니스클럽</div>
+        <div className="text-emerald-200 text-sm mt-1">SOSO TENNIS CLUB</div>
+      </div>
+      <div className="text-emerald-300 text-xs tracking-widest mt-4">불러오는 중...</div>
+    </div>
+  );
 
   return(
     <div className="min-h-screen bg-stone-50">
-      <header className="bg-gradient-to-br from-emerald-800 via-emerald-700 to-emerald-900 text-white relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10" style={{backgroundImage:'repeating-linear-gradient(45deg,transparent,transparent 20px,rgba(255,255,255,0.05) 20px,rgba(255,255,255,0.05) 40px)'}}></div>
-        <div className="max-w-6xl mx-auto px-6 py-8 relative">
-          <div className="flex items-center gap-3 mb-2">
-            <img src="/icon-192.png" alt="소소테니스" className="w-12 h-12 rounded-2xl shadow-lg"/>
-            <div className="text-yellow-200 text-xs tracking-[0.3em] font-medium">SOSO TENNIS CLUB</div>
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight mb-1">소소테니스클럽</h1>
-          <div className="flex items-center gap-3 flex-wrap">
-            <p className="text-emerald-100 text-sm font-light">{currentYear}년 · 총 {matches.filter(m=>!m.isScheduled).length}경기 · 멤버 {members.length}명</p>
-            {getCurrentOfficer(currentYear,currentQuarter)&&<span className="flex items-center gap-1 bg-yellow-300/20 text-yellow-200 text-xs px-2 py-1 rounded-full"><Crown size={11}/> {currentQuarter}분기 회장: {getCurrentOfficer(currentYear,currentQuarter)?.name}</span>}
-            <div className="flex items-center gap-2 flex-wrap">
+      {/* 상단 고정 헤더 */}
+      <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-stone-200 shadow-sm">
+        <div className="max-w-6xl mx-auto px-4">
+          {/* 타이틀 바 */}
+          <div className="flex items-center justify-between h-12">
+            <div className="flex items-center gap-2">
+              <img src="/icon-192.png" alt="소소테니스" className="w-7 h-7 rounded-lg"/>
+              <span className="font-bold text-emerald-800 text-sm">소소테니스클럽</span>
+            </div>
+            <div className="flex items-center gap-1.5">
               {!isStandalone && (
-                <button onClick={handleInstallClick} className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium bg-white/10 text-emerald-200 border border-white/20">
-                  📲 앱으로 설치
-                </button>
+                <button onClick={handleInstallClick} className="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">📲</button>
               )}
-              <button onClick={toggleAdminMode} className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium transition-all ${isAdmin?'bg-red-400/30 text-red-200 border border-red-400/40':'bg-white/10 text-emerald-200 border border-white/20'}`}>
-                {isAdmin?'🔑 관리자':'🔒 일반'}
+              <button onClick={toggleAdminMode} className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-all ${isAdmin?'bg-red-50 text-red-600 border-red-200':'bg-stone-50 text-stone-500 border-stone-200'}`}>
+                {isAdmin?'🔑 관리자':'🔒'}
               </button>
             </div>
+          </div>
+          {/* 탭 네비게이션 */}
+          <div className="flex">
+            {[{id:'calendar',label:'캘린더',icon:Calendar},{id:'ranking',label:'랭킹',icon:Trophy},{id:'analysis',label:'분석',icon:BarChart2},{id:'matches',label:'경기',icon:Trophy},{id:'members',label:'멤버',icon:Users}].map(tab=>(
+              <button key={tab.id} onClick={()=>setActiveTab(tab.id)}
+                className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-xs font-medium border-b-2 transition-all ${activeTab===tab.id?'border-emerald-700 text-emerald-700':'border-transparent text-stone-400'}`}>
+                <tab.icon size={15}/>
+                <span>{tab.label}</span>
+              </button>
+            ))}
           </div>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 mt-6">
-        <div className="flex gap-1 bg-white rounded-lg p-1 shadow-sm border border-stone-200 overflow-x-auto">
-          {[{id:'calendar',label:'캘린더',icon:Calendar},{id:'ranking',label:'랭킹',icon:Trophy},{id:'analysis',label:'분석',icon:BarChart2},{id:'matches',label:'경기',icon:Trophy},{id:'members',label:'멤버',icon:Users}].map(tab=>(
-            <button key={tab.id} onClick={()=>setActiveTab(tab.id)} className={`flex-1 flex items-center justify-center gap-1 px-2 py-2.5 rounded-md text-xs font-medium transition-all whitespace-nowrap ${activeTab===tab.id?'bg-emerald-800 text-white':'text-stone-600 hover:bg-stone-100'}`}>
-              <tab.icon size={13}/>{tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <main className="max-w-6xl mx-auto px-4 py-6 pb-32">
+      <main className="max-w-6xl mx-auto px-4 pt-28 pb-32">
 
         {activeTab==='calendar'&&(
           <div className="space-y-4">
+            {/* 오늘의 요약 카드 */}
+            <div className="bg-gradient-to-br from-emerald-800 to-emerald-700 rounded-2xl p-4 text-white">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-emerald-200 text-xs">{currentYear}년 {currentQuarter}분기</div>
+                  <div className="text-xl font-bold mt-0.5">소소테니스클럽 🎾</div>
+                </div>
+                {getCurrentOfficer(currentYear,currentQuarter)&&(
+                  <div className="text-right">
+                    <div className="text-emerald-300 text-xs">분기 회장</div>
+                    <div className="text-sm font-bold flex items-center gap-1 justify-end"><Crown size={12} className="text-yellow-300"/>{getCurrentOfficer(currentYear,currentQuarter)?.name}</div>
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-white/10 rounded-xl p-2.5 text-center">
+                  <div className="text-2xl font-bold">{matches.filter(m=>!m.isScheduled).length}</div>
+                  <div className="text-emerald-200 text-xs mt-0.5">총 경기</div>
+                </div>
+                <div className="bg-white/10 rounded-xl p-2.5 text-center">
+                  <div className="text-2xl font-bold">{members.length}</div>
+                  <div className="text-emerald-200 text-xs mt-0.5">멤버</div>
+                </div>
+                <div className="bg-white/10 rounded-xl p-2.5 text-center">
+                  <div className="text-2xl font-bold">{Object.keys(attendance).length}</div>
+                  <div className="text-emerald-200 text-xs mt-0.5">활동일</div>
+                </div>
+              </div>
+            </div>
+
             {isAdmin && (
               <div className="flex gap-2">
                 <button onClick={()=>setShowImportModal(true)} className="flex-1 py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
