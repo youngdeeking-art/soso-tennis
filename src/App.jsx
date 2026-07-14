@@ -96,6 +96,10 @@ export default function App() {
   const [gradeQuarter, setGradeQuarter] = useState(Math.ceil((new Date().getMonth()+1)/3));
   const [attendanceConfirmed, setAttendanceConfirmed] = useState({});
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null); // Android 설치 프롬프트
+  const [showInstallModal, setShowInstallModal] = useState(false); // iOS 안내 모달
+  const [isStandalone, setIsStandalone] = useState(false); // 이미 설치됐는지
 
   const [localAttendance, setLocalAttendance] = useState(null);
   const [attendanceDirty, setAttendanceDirty] = useState(false);
@@ -117,6 +121,7 @@ export default function App() {
   const [editMemberType, setEditMemberType] = useState('regular');
   const [memberSort, setMemberSort] = useState('name');
   const [memberFilter, setMemberFilter] = useState('all');
+  const [memberSubTab, setMemberSubTab] = useState('list'); // list | grades
   const [showSortFilter, setShowSortFilter] = useState(false);
 
   const [showAddMatch, setShowAddMatch] = useState(false);
@@ -177,6 +182,29 @@ export default function App() {
   const currentQuarter = Math.ceil((new Date().getMonth()+1)/3);
 
   useEffect(() => { loadAll(); }, []);
+
+  useEffect(() => {
+    // 이미 앱으로 설치됐는지 확인
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+      setIsStandalone(true);
+    }
+    // Android Chrome 설치 프롬프트 저장
+    const handler = (e) => { e.preventDefault(); setInstallPrompt(e); };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIOS) { setShowInstallModal(true); return; }
+    if (installPrompt) {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') setInstallPrompt(null);
+    } else {
+      setShowInstallModal(true);
+    }
+  };
 
   useEffect(() => {
     if (selectedDate) {
@@ -295,11 +323,24 @@ export default function App() {
     }
   };
 
+  const isToday = (dateStr) => dateStr === today;
+  const isPast = (dateStr) => dateStr < today;
+
   const checkPassword = () => {
     const pw = prompt('비밀번호를 입력하세요:');
     if (pw !== DELETE_PASSWORD) { alert('비밀번호가 틀렸습니다.'); return false; }
     return true;
   };
+
+  const toggleAdminMode = () => {
+    if (isAdmin) { setIsAdmin(false); return; }
+    const pw = prompt('관리자 비밀번호:');
+    if (pw === DELETE_PASSWORD) { setIsAdmin(true); alert('관리자 모드 활성화!'); }
+    else alert('비밀번호가 틀렸습니다.');
+  };
+
+  // 날짜 기반 편집 가능 여부
+  const canEdit = (dateStr) => isAdmin || isToday(dateStr);
 
   // 게스트 추가 - DB에 바로 저장, 완료 후 전체 다시 로드
   const addDateGuest = async (date, gender) => {
@@ -1248,6 +1289,16 @@ export default function App() {
           <div className="flex items-center gap-3 flex-wrap">
             <p className="text-emerald-100 text-sm font-light">{currentYear}년 · 총 {matches.filter(m=>!m.isScheduled).length}경기 · 멤버 {members.length}명</p>
             {getCurrentOfficer(currentYear,currentQuarter)&&<span className="flex items-center gap-1 bg-yellow-300/20 text-yellow-200 text-xs px-2 py-1 rounded-full"><Crown size={11}/> {currentQuarter}분기 회장: {getCurrentOfficer(currentYear,currentQuarter)?.name}</span>}
+            <div className="flex items-center gap-2 flex-wrap">
+              {!isStandalone && (
+                <button onClick={handleInstallClick} className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium bg-white/10 text-emerald-200 border border-white/20">
+                  📲 앱으로 설치
+                </button>
+              )}
+              <button onClick={toggleAdminMode} className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium transition-all ${isAdmin?'bg-red-400/30 text-red-200 border border-red-400/40':'bg-white/10 text-emerald-200 border border-white/20'}`}>
+                {isAdmin?'🔑 관리자':'🔒 일반'}
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -1266,16 +1317,18 @@ export default function App() {
 
         {activeTab==='calendar'&&(
           <div className="space-y-4">
-            <div className="flex gap-2">
-              <button onClick={()=>{if(!checkPassword())return;setShowImportModal(true);}} className="flex-1 py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
-                📋 대진표 붙여넣기
-              </button>
-              <button onClick={()=>{if(!checkPassword())return;setAutoDate(selectedDate||new Date().toISOString().split('T')[0]);setAutoPreview(null);setShowAutoModal(true);}} className="flex-1 py-3 bg-gradient-to-r from-blue-700 to-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
-                🎲 자동 대진 생성
-              </button>
-            </div>
+            {isAdmin && (
+              <div className="flex gap-2">
+                <button onClick={()=>setShowImportModal(true)} className="flex-1 py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
+                  📋 대진표 붙여넣기
+                </button>
+                <button onClick={()=>{setAutoDate(selectedDate||new Date().toISOString().split('T')[0]);setAutoPreview(null);setShowAutoModal(true);}} className="flex-1 py-3 bg-gradient-to-r from-blue-700 to-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
+                  🎲 자동 대진 생성
+                </button>
+              </div>
+            )}
 
-            <div className="bg-white rounded-lg border border-stone-200 px-4 py-3 flex items-center justify-between">
+            {isAdmin && <div className="bg-white rounded-lg border border-stone-200 px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Crown size={16} className="text-yellow-500"/>
                 <div>
@@ -1286,7 +1339,7 @@ export default function App() {
               <button onClick={()=>{setOfficerYear(calYear);setOfficerQuarter(calQuarter);setOfficerMemberId(calOfficer?.member_id||'');setShowOfficerModal(true);}} className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-lg font-medium flex items-center gap-1">
                 <Crown size={11}/> {calOfficer?'변경':'설정'}
               </button>
-            </div>
+            </div>}
 
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
               <button onClick={()=>setCalendarMode('week')} className={`flex-1 py-2 rounded-md text-sm font-medium ${calendarMode==='week'?'bg-white text-stone-800 shadow-sm':'text-stone-500'}`}>주간</button>
@@ -1367,7 +1420,11 @@ export default function App() {
                           {members.map(m=>{
                             const attended=currentAttendees.includes(m.id), isConf=attendanceConfirmed[selectedDate];
                             return(
-                              <button key={m.id} onClick={()=>{if(isConf){if(!checkPassword())return;} toggleLocalAttendance(m.id);}}
+                              <button key={m.id} onClick={()=>{
+                                  if(!canEdit(selectedDate)){alert('지난 날짜는 관리자만 수정할 수 있어요.');return;}
+                                  if(isConf){if(!checkPassword())return;}
+                                  toggleLocalAttendance(m.id);
+                                }}
                                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${attended?`${getGenderBg(m.gender)} font-medium`:'bg-white border-stone-200 text-stone-600'} ${isConf?'opacity-70':''}`}>
                                 <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${attended?'bg-emerald-600 border-emerald-600':'border-stone-300'}`}>{attended&&<Check size={12} className="text-white"/>}</div>
                                 <span className={`truncate ${attended?getGenderColor(m.gender):''}`}>{m.name}</span>
@@ -1401,8 +1458,10 @@ export default function App() {
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-semibold text-stone-600">게스트 ({selectedDateGuests.length}명)</span>
                             <div className="flex gap-1.5">
-                              <button onClick={()=>addDateGuest(selectedDate,'M')} className="flex items-center gap-0.5 text-xs bg-blue-100 text-blue-700 px-2 py-1.5 rounded-lg font-medium"><Plus size={10}/> ♂남</button>
-                              <button onClick={()=>addDateGuest(selectedDate,'F')} className="flex items-center gap-0.5 text-xs bg-pink-100 text-pink-700 px-2 py-1.5 rounded-lg font-medium"><Plus size={10}/> ♀여</button>
+                              {canEdit(selectedDate) && <>
+                                <button onClick={()=>addDateGuest(selectedDate,'M')} className="flex items-center gap-0.5 text-xs bg-blue-100 text-blue-700 px-2 py-1.5 rounded-lg font-medium"><Plus size={10}/> ♂남</button>
+                                <button onClick={()=>addDateGuest(selectedDate,'F')} className="flex items-center gap-0.5 text-xs bg-pink-100 text-pink-700 px-2 py-1.5 rounded-lg font-medium"><Plus size={10}/> ♀여</button>
+                              </>}
                             </div>
                           </div>
                           {selectedDateGuests.length>0?(
@@ -1410,7 +1469,7 @@ export default function App() {
                               {selectedDateGuests.map(g=>(
                                 <div key={g.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${getGenderBg(g.gender)}`}>
                                   <span className={`flex-1 truncate font-medium text-xs ${getGenderColor(g.gender)}`}>{g.name}</span>
-                                  <button onClick={()=>removeDateGuest(selectedDate,g.id)} className="text-stone-400 hover:text-red-500 flex-shrink-0"><X size={12}/></button>
+                                  {canEdit(selectedDate) && <button onClick={()=>removeDateGuest(selectedDate,g.id)} className="text-stone-400 hover:text-red-500 flex-shrink-0"><X size={12}/></button>}
                                 </div>
                               ))}
                             </div>
@@ -1418,9 +1477,9 @@ export default function App() {
                         </div>
 
                         <div className="text-xs text-stone-400 px-1 border-t border-stone-100 pt-2">총 {currentAttendees.length+selectedDateGuests.length}명 참석</div>
-                        {attendanceConfirmed[selectedDate]?
-                          <button onClick={()=>unconfirmAttendance(selectedDate)} className="w-full py-2 bg-stone-100 border border-stone-300 rounded-lg text-xs text-stone-600 flex items-center justify-center gap-1.5"><Lock size={12}/> 참석 확정 해제 (비번 필요)</button>:
-                          <button onClick={()=>confirmAttendance(selectedDate)} className="w-full py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5"><Lock size={12}/> 참석자 확정하기</button>}
+                        {isAdmin && (attendanceConfirmed[selectedDate]?
+                          <button onClick={()=>unconfirmAttendance(selectedDate)} className="w-full py-2 bg-stone-100 border border-stone-300 rounded-lg text-xs text-stone-600 flex items-center justify-center gap-1.5"><Lock size={12}/> 참석 확정 해제</button>:
+                          <button onClick={()=>confirmAttendance(selectedDate)} className="w-full py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5"><Lock size={12}/> 참석자 확정하기</button>)}
                       </div>
                     )}
                   </div>
@@ -1432,10 +1491,10 @@ export default function App() {
                         <div className="flex gap-1.5">
                           {!editOrderMode && !selectMode && !swapMode && (
                             <>
-                              <button onClick={()=>{setEditOrderMode(true);setLocalMatchOrder([...selectedDateMatches]);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-blue-100 text-blue-600">순서편집</button>
-                              <button onClick={()=>{setSwapMode(true);setSwapTarget(null);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-purple-100 text-purple-600">선수교체</button>
-                              <button onClick={()=>setSelectMode(true)} className="text-xs px-2 py-1 rounded-lg font-medium bg-stone-100 text-stone-600">선택삭제</button>
-                              <button onClick={()=>deleteAllDateMatches(selectedDate)} className="text-xs px-2 py-1 rounded-lg font-medium bg-red-100 text-red-600">전체삭제</button>
+                              {isAdmin && <button onClick={()=>{setEditOrderMode(true);setLocalMatchOrder([...selectedDateMatches]);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-blue-100 text-blue-600">순서편집</button>}
+                              {isAdmin && <button onClick={()=>{setSwapMode(true);setSwapTarget(null);}} className="text-xs px-2 py-1 rounded-lg font-medium bg-purple-100 text-purple-600">선수교체</button>}
+                              {isAdmin && <button onClick={()=>setSelectMode(true)} className="text-xs px-2 py-1 rounded-lg font-medium bg-stone-100 text-stone-600">선택삭제</button>}
+                              {isAdmin && <button onClick={()=>deleteAllDateMatches(selectedDate)} className="text-xs px-2 py-1 rounded-lg font-medium bg-red-100 text-red-600">전체삭제</button>}
                             </>
                           )}
                           {editOrderMode && (
@@ -1489,6 +1548,7 @@ export default function App() {
                                 swapPoBack={swapPoBack}
                                 handleSwapPlayer={handleSwapPlayer}
                                 dateGuests={dateGuests}
+                                isAdmin={isAdmin}
                                 Lock={Lock}
                                 Check={Check}
                                 Pencil={Pencil}
@@ -1502,13 +1562,13 @@ export default function App() {
                   )}
 
                   <div className="space-y-2">
-                    <div className="flex gap-2">
+                    {isAdmin && <div className="flex gap-2">
                       {members.length>=2&&<button onClick={()=>openAddMatch(selectedDate,false)} className="flex-1 py-2.5 border border-dashed border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5"><Plus size={14}/> 경기 기록</button>}
                       {members.length>=2&&<button onClick={()=>openAddMatch(selectedDate,true)} className="flex-1 py-2.5 border border-dashed border-orange-300 rounded-lg text-sm text-orange-600 flex items-center justify-center gap-1.5"><Plus size={14}/> 대진 등록</button>}
-                    </div>
-                    {selectedDateMatches.filter(m=>!m.isScheduled).length>0&&(
+                    </div>}
+                    {isAdmin && selectedDateMatches.filter(m=>!m.isScheduled).length>0&&(
                       isDateConfirmed?
-                        <button onClick={()=>unconfirmDateMatches(selectedDate)} className="w-full py-2.5 bg-stone-100 border border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5"><Lock size={14}/> 경기 확정 해제 (비번 필요)</button>:
+                        <button onClick={()=>unconfirmDateMatches(selectedDate)} className="w-full py-2.5 bg-stone-100 border border-stone-300 rounded-lg text-sm text-stone-600 flex items-center justify-center gap-1.5"><Lock size={14}/> 경기 확정 해제</button>:
                         hasUnconfirmed?<button onClick={()=>confirmDateMatches(selectedDate)} className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5"><Lock size={14}/> 경기 확정하기</button>:null
                     )}
                     {matches.filter(m=>m.date===selectedDate&&!m.isScheduled&&m.scoreA!==null).length>0&&(
@@ -1797,6 +1857,12 @@ export default function App() {
 
         {activeTab==='members'&&(
           <div className="space-y-4">
+            <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
+              <button onClick={()=>setMemberSubTab('list')} className={`flex-1 py-2 rounded-md text-sm font-medium ${memberSubTab==='list'?'bg-white text-stone-800 shadow-sm':'text-stone-500'}`}>멤버 목록</button>
+              {isAdmin && <button onClick={()=>setMemberSubTab('grades')} className={`flex-1 py-2 rounded-md text-sm font-medium ${memberSubTab==='grades'?'bg-white text-stone-800 shadow-sm':'text-stone-500'}`}>분기별 등급</button>}
+            </div>
+            {memberSubTab==='list' && (
+              <div className="space-y-4">
             <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
               <button onClick={()=>setShowSortFilter(!showSortFilter)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-stone-700">
                 <div className="flex items-center gap-2"><Filter size={15}/>정렬 / 필터<span className="text-xs text-stone-400 font-normal">{memberFilter==='all'?'전체':memberFilter==='regular'?'정회원':'준회원'} · {memberSort==='name'?'이름순':memberSort==='winRate'?'승률순':memberSort==='attendance'?'참석순':'등급순'}</span></div>
@@ -1813,6 +1879,42 @@ export default function App() {
                 </div>
               )}
             </div>
+            {officers.length>0&&(
+              <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-stone-100 flex items-center gap-2"><Crown size={15} className="text-yellow-500"/><h3 className="text-sm font-bold text-stone-800">역대 회장</h3></div>
+                <div className="divide-y divide-stone-100">
+                  {[...officers].sort((a,b)=>b.year-a.year||b.quarter-a.quarter).map(o=>{
+                    const mName=members.find(m=>m.id===o.member_id)?.name||'?';
+                    const isCurrent=o.year===currentYear&&o.quarter===currentQuarter;
+                    return(<div key={o.id} className="px-4 py-3 flex items-center gap-3"><Crown size={14} className={isCurrent?'text-yellow-500':'text-stone-300'}/><div className="flex-1"><span className="font-semibold text-stone-800 text-sm">{mName}</span>{isCurrent&&<span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">현재</span>}</div><span className="text-xs text-stone-500">{o.year}년 {o.quarter}분기</span></div>);
+                  })}
+                </div>
+              </div>
+            )}
+            {getSortedFilteredStats().length===0?<EmptyState icon={Users} title="멤버가 없습니다" desc="아래 + 버튼으로 멤버를 추가하세요"/>:(
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {getSortedFilteredStats().map(member=>(
+                  <div key={member.id} className={`bg-white rounded-lg border p-4 flex items-center gap-3 ${getGenderBg(member.gender)}`}>
+                    <div className="relative flex-shrink-0">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${member.gender==='M'?'bg-blue-100 text-blue-700':'bg-pink-100 text-pink-600'}`}>{member.name.charAt(0)}</div>
+                      {member.isPresident&&<div className="absolute -top-1 -right-1 w-5 h-5 bg-yellow-400 rounded-full flex items-center justify-center"><Crown size={10} className="text-white"/></div>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap"><span className={`font-semibold truncate ${getGenderColor(member.gender)}`}>{member.name}</span><span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${getGenderBadge(member.gender)}`}>{member.gender==='M'?'남':'여'}</span><span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${member.member_type==='regular'?'bg-emerald-100 text-emerald-700':'bg-stone-100 text-stone-500'}`}>{member.member_type==='regular'?'정회원':'준회원'}</span></div>
+                      <div className="text-xs text-stone-500 mt-0.5">{member.rankedTotal===0?`출석 ${member.attendanceCount}회`:`${member.rankedWins}승${member.rankedDraws>0?` ${member.rankedDraws}무`:''} ${member.rankedLosses}패 · 출석 ${member.attendanceCount}회`}</div>
+                    </div>
+                    {isAdmin && <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={()=>{setEditingMember(member);setEditMemberName(member.name);setEditMemberGender(member.gender);setEditMemberType(member.member_type||'regular');}} className="text-stone-400 p-2"><Pencil size={15}/></button>
+                      <button onClick={()=>deleteMember(member.id)} className="text-stone-300 p-2"><Trash2 size={15}/></button>
+                    </div>}
+                  </div>
+                ))}
+              </div>
+            )}
+              </div>
+            )}
+            {memberSubTab==='grades' && (
+              <div className="space-y-4">
             {/* 분기별 등급 관리 */}
             <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
               <div className="px-4 py-3 border-b border-stone-100 flex items-center justify-between">
@@ -1843,36 +1945,6 @@ export default function App() {
               </div>
             </div>
 
-            {officers.length>0&&(
-              <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
-                <div className="px-4 py-3 border-b border-stone-100 flex items-center gap-2"><Crown size={15} className="text-yellow-500"/><h3 className="text-sm font-bold text-stone-800">역대 회장</h3></div>
-                <div className="divide-y divide-stone-100">
-                  {[...officers].sort((a,b)=>b.year-a.year||b.quarter-a.quarter).map(o=>{
-                    const mName=members.find(m=>m.id===o.member_id)?.name||'?';
-                    const isCurrent=o.year===currentYear&&o.quarter===currentQuarter;
-                    return(<div key={o.id} className="px-4 py-3 flex items-center gap-3"><Crown size={14} className={isCurrent?'text-yellow-500':'text-stone-300'}/><div className="flex-1"><span className="font-semibold text-stone-800 text-sm">{mName}</span>{isCurrent&&<span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">현재</span>}</div><span className="text-xs text-stone-500">{o.year}년 {o.quarter}분기</span></div>);
-                  })}
-                </div>
-              </div>
-            )}
-            {getSortedFilteredStats().length===0?<EmptyState icon={Users} title="멤버가 없습니다" desc="아래 + 버튼으로 멤버를 추가하세요"/>:(
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {getSortedFilteredStats().map(member=>(
-                  <div key={member.id} className={`bg-white rounded-lg border p-4 flex items-center gap-3 ${getGenderBg(member.gender)}`}>
-                    <div className="relative flex-shrink-0">
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${member.gender==='M'?'bg-blue-100 text-blue-700':'bg-pink-100 text-pink-600'}`}>{member.name.charAt(0)}</div>
-                      {member.isPresident&&<div className="absolute -top-1 -right-1 w-5 h-5 bg-yellow-400 rounded-full flex items-center justify-center"><Crown size={10} className="text-white"/></div>}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap"><span className={`font-semibold truncate ${getGenderColor(member.gender)}`}>{member.name}</span><span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${getGenderBadge(member.gender)}`}>{member.gender==='M'?'남':'여'}</span><span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${member.member_type==='regular'?'bg-emerald-100 text-emerald-700':'bg-stone-100 text-stone-500'}`}>{member.member_type==='regular'?'정회원':'준회원'}</span></div>
-                      <div className="text-xs text-stone-500 mt-0.5">{member.rankedTotal===0?`출석 ${member.attendanceCount}회`:`${member.rankedWins}승${member.rankedDraws>0?` ${member.rankedDraws}무`:''} ${member.rankedLosses}패 · 출석 ${member.attendanceCount}회`}</div>
-                    </div>
-                    <div className="flex gap-1 flex-shrink-0">
-                      <button onClick={()=>{setEditingMember(member);setEditMemberName(member.name);setEditMemberGender(member.gender);setEditMemberType(member.member_type||'regular');}} className="text-stone-400 p-2"><Pencil size={15}/></button>
-                      <button onClick={()=>deleteMember(member.id)} className="text-stone-300 p-2"><Trash2 size={15}/></button>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
@@ -1880,7 +1952,7 @@ export default function App() {
       </main>
 
       <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-20">
-        {activeTab==='members'&&<button onClick={()=>setShowAddMember(true)} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">멤버 추가</span></button>}
+        {activeTab==='members'&&isAdmin&&<button onClick={()=>setShowAddMember(true)} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">멤버 추가</span></button>}
         {(activeTab==='matches'||activeTab==='ranking')&&members.length>=2&&<button onClick={()=>openAddMatch()} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">경기 기록</span></button>}
       </div>
 
@@ -1914,6 +1986,32 @@ export default function App() {
                 </div>
               </>
             )}
+          </div>
+        </Modal>
+      )}
+
+      {showInstallModal && (
+        <Modal onClose={()=>setShowInstallModal(false)} title="📲 앱으로 설치하기">
+          <div className="space-y-4">
+            <div className="bg-emerald-50 rounded-xl p-4 text-center">
+              <div className="text-5xl mb-2">🎾</div>
+              <div className="font-bold text-emerald-800">소소테니스클럽</div>
+              <div className="text-xs text-emerald-600 mt-1">홈 화면에 추가하면 앱처럼 사용할 수 있어요</div>
+            </div>
+            <div className="space-y-3">
+              <div className="font-semibold text-stone-700 text-sm">🍎 iPhone / iPad (Safari)</div>
+              <div className="bg-stone-50 rounded-lg p-3 space-y-2 text-sm text-stone-600">
+                <div className="flex items-center gap-2"><span className="text-lg">1️⃣</span> 하단 <strong>공유 버튼</strong> (□↑) 탭</div>
+                <div className="flex items-center gap-2"><span className="text-lg">2️⃣</span> <strong>"홈 화면에 추가"</strong> 선택</div>
+                <div className="flex items-center gap-2"><span className="text-lg">3️⃣</span> 오른쪽 상단 <strong>"추가"</strong> 탭</div>
+              </div>
+              <div className="font-semibold text-stone-700 text-sm">🤖 Android (Chrome)</div>
+              <div className="bg-stone-50 rounded-lg p-3 space-y-2 text-sm text-stone-600">
+                <div className="flex items-center gap-2"><span className="text-lg">1️⃣</span> 우측 상단 <strong>⋮ 메뉴</strong> 탭</div>
+                <div className="flex items-center gap-2"><span className="text-lg">2️⃣</span> <strong>"앱 설치"</strong> 또는 <strong>"홈 화면에 추가"</strong> 선택</div>
+              </div>
+            </div>
+            <button onClick={()=>setShowInstallModal(false)} className="w-full py-2.5 bg-emerald-700 text-white rounded-lg font-medium">확인</button>
           </div>
         </Modal>
       )}
@@ -2300,7 +2398,7 @@ function EmptyState({icon:Icon,title,desc}) {
 }
 
 // 드래그 가능한 경기 카드
-function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTarget, selectedMatchIds, toggleSelectMatch, openScoreModal, openEditMatch, deleteMatch, getMemberName, getMatchTypeLabel, swapPoBack, handleSwapPlayer, dateGuests, Lock, Check, Pencil, Trash2 }) {
+function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTarget, selectedMatchIds, toggleSelectMatch, openScoreModal, openEditMatch, deleteMatch, getMemberName, getMatchTypeLabel, swapPoBack, handleSwapPlayer, dateGuests, isAdmin, Lock, Check, Pencil, Trash2 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: match.id, disabled: !editOrderMode });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 999 : 'auto' };
   const typeInfo = getMatchTypeLabel(match.matchType);
@@ -2357,8 +2455,8 @@ function SortableMatch({ match, idx, selectMode, editOrderMode, swapMode, swapTa
           :<span className="text-xs text-stone-400">미확정</span>}
         <div className="flex-1"></div>
 
-        {!selectMode&&!editOrderMode&&!swapMode&&!match.confirmed&&<button onClick={e=>{e.stopPropagation();openEditMatch(match);}} className="text-stone-400 p-1"><Pencil size={13}/></button>}
-        {!selectMode&&!editOrderMode&&!swapMode&&<button onClick={e=>{e.stopPropagation();deleteMatch(match);}} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
+        {isAdmin&&!selectMode&&!editOrderMode&&!swapMode&&!match.confirmed&&<button onClick={e=>{e.stopPropagation();openEditMatch(match);}} className="text-stone-400 p-1"><Pencil size={13}/></button>}
+        {isAdmin&&!selectMode&&!editOrderMode&&!swapMode&&<button onClick={e=>{e.stopPropagation();deleteMatch(match);}} className="text-stone-300 p-1"><Trash2 size={13}/></button>}
       </div>
       <div className="flex items-center gap-2">
         <div className={`flex-1 min-w-0 space-y-1 ${!match.isScheduled&&!draw&&match.scoreA>match.scoreB?'font-bold text-emerald-800':draw?'text-stone-600':'text-stone-500'}`}>
