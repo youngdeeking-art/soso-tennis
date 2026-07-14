@@ -1282,7 +1282,7 @@ export default function App() {
         <div className="absolute inset-0 opacity-10" style={{backgroundImage:'repeating-linear-gradient(45deg,transparent,transparent 20px,rgba(255,255,255,0.05) 20px,rgba(255,255,255,0.05) 40px)'}}></div>
         <div className="max-w-6xl mx-auto px-6 py-8 relative">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 rounded-full bg-yellow-300 flex items-center justify-center shadow-lg"><span className="text-2xl">🎾</span></div>
+            <img src="/icon-192.png" alt="소소테니스" className="w-12 h-12 rounded-2xl shadow-lg"/>
             <div className="text-yellow-200 text-xs tracking-[0.3em] font-medium">SOSO TENNIS CLUB</div>
           </div>
           <h1 className="text-3xl font-bold tracking-tight mb-1">소소테니스클럽</h1>
