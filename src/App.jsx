@@ -1313,7 +1313,7 @@ export default function App() {
   return(
     <div className="min-h-screen bg-stone-50">
       {/* 상단 고정 헤더 */}
-      <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-stone-200 shadow-sm">
+      <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-stone-200 shadow-sm" style={{paddingTop:'env(safe-area-inset-top)'}}>
         <div className="max-w-6xl mx-auto px-4">
           {/* 타이틀 바 */}
           <div className="flex items-center justify-between h-12">
@@ -1343,7 +1343,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 pt-28 pb-32">
+      <main className="max-w-6xl mx-auto px-4 pb-32" style={{paddingTop:'calc(env(safe-area-inset-top) + 7rem)'}}>
 
         {activeTab==='calendar'&&(
           <div className="space-y-4">
@@ -2029,7 +2029,7 @@ export default function App() {
         )}
       </main>
 
-      <div className="fixed bottom-6 right-4 flex flex-col gap-2 z-20">
+      <div className="fixed right-4 flex flex-col gap-2 z-20" style={{bottom:'calc(env(safe-area-inset-bottom) + 1.5rem)'}}>
         {activeTab==='members'&&isAdmin&&<button onClick={()=>setShowAddMember(true)} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">멤버 추가</span></button>}
         {(activeTab==='matches'||activeTab==='ranking')&&members.length>=2&&<button onClick={()=>openAddMatch()} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">경기 기록</span></button>}
         {activeTab==='calendar'&&isAdmin&&(
