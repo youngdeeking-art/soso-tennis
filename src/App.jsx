@@ -312,6 +312,7 @@ export default function App() {
   const loadAll = async () => {
     try {
       setLoading(true);
+      const startTime = Date.now();
       const [{ data: m }, { data: mt }, { data: att }, { data: off }, { data: ac }, { data: mg }] = await Promise.all([
         supabase.from('members').select('*').order('created_at'),
         supabase.from('matches').select('*').order('match_order', { ascending: true }),
@@ -337,6 +338,9 @@ export default function App() {
       setAttendanceConfirmed(acMap);
       await loadGuests();
       await loadSettings();
+      // 최소 1.5초 로딩 유지
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 1500) await new Promise(r => setTimeout(r, 1500 - elapsed));
     } catch (e) {
       alert('데이터 로딩 실패: ' + e.message);
     } finally {
@@ -1297,15 +1301,11 @@ export default function App() {
   };
 
   if(loading) return (
-    <div className="min-h-screen flex flex-col items-center justify-center" style={{background:'#1a2e1a'}}>
-      <img src="/loading-bg.png" alt="소소테니스" className="w-64 h-64 object-contain"/>
-      <div className="text-center mt-2">
-        <div className="text-white text-4xl font-black tracking-widest">SOSO</div>
-        <div className="text-lime-400 text-sm tracking-[0.4em] font-medium">⚫ TENNIS ⚫</div>
-      </div>
-      <div className="mt-8 flex flex-col items-center gap-2">
-        <div className="w-8 h-8 border-2 border-lime-400 border-t-transparent rounded-full animate-spin"></div>
-        <div className="text-stone-400 text-xs">Loading...</div>
+    <div className="min-h-screen flex flex-col items-center justify-center" style={{background:'#121f19'}}>
+      <img src="/loading-bg.png" alt="소소테니스" className="w-72 h-72 object-contain"/>
+      <div className="mt-6 flex flex-col items-center gap-2">
+        <div className="w-7 h-7 border-2 border-lime-400 border-t-transparent rounded-full animate-spin"></div>
+        <div className="text-stone-400 text-xs tracking-widest">Loading...</div>
       </div>
     </div>
   );
@@ -1319,7 +1319,7 @@ export default function App() {
           <div className="flex items-center justify-between h-12">
             <div className="flex items-center gap-2">
               <img src="/icon-192.png" alt="소소테니스" className="w-7 h-7 rounded-lg"/>
-              <span className="font-bold text-emerald-800 text-sm">소소테니스클럽</span>
+              <span className="font-bold text-emerald-800 text-sm">SOSO Tennis</span>
             </div>
             <div className="flex items-center gap-1.5">
               {!isStandalone && (
@@ -1412,29 +1412,9 @@ export default function App() {
               </div>
             </div>
 
-            {isAdmin && (
-              <div className="flex gap-2">
-                <button onClick={()=>setShowImportModal(true)} className="flex-1 py-3 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
-                  📋 대진표 붙여넣기
-                </button>
-                <button onClick={()=>{setAutoDate(selectedDate||new Date().toISOString().split('T')[0]);setAutoPreview(null);setShowAutoModal(true);}} className="flex-1 py-3 bg-gradient-to-r from-blue-700 to-blue-600 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
-                  🎲 자동 대진 생성
-                </button>
-              </div>
-            )}
 
-            {isAdmin && <div className="bg-white rounded-lg border border-stone-200 px-4 py-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Crown size={16} className="text-yellow-500"/>
-                <div>
-                  <div className="text-sm font-bold text-stone-800">{calYear}년 {calQuarter}분기 회장</div>
-                  {calOfficer?<div className="flex items-center gap-2"><span className="text-sm text-emerald-700 font-semibold">{calOfficer.name}</span><button onClick={()=>deleteOfficer(calOfficer.id)} className="text-xs text-stone-400">해제</button></div>:<div className="text-xs text-stone-400">미설정</div>}
-                </div>
-              </div>
-              <button onClick={()=>{setOfficerYear(calYear);setOfficerQuarter(calQuarter);setOfficerMemberId(calOfficer?.member_id||'');setShowOfficerModal(true);}} className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-lg font-medium flex items-center gap-1">
-                <Crown size={11}/> {calOfficer?'변경':'설정'}
-              </button>
-            </div>}
+
+
 
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
               <button onClick={()=>setCalendarMode('week')} className={`flex-1 py-2 rounded-md text-sm font-medium ${calendarMode==='week'?'bg-white text-stone-800 shadow-sm':'text-stone-500'}`}>주간</button>
@@ -1974,18 +1954,21 @@ export default function App() {
                 </div>
               )}
             </div>
-            {officers.length>0&&(
-              <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
-                <div className="px-4 py-3 border-b border-stone-100 flex items-center gap-2"><Crown size={15} className="text-yellow-500"/><h3 className="text-sm font-bold text-stone-800">역대 회장</h3></div>
+            <div className="bg-white rounded-lg border border-stone-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-stone-100 flex items-center justify-between">
+                <div className="flex items-center gap-2"><Crown size={15} className="text-yellow-500"/><h3 className="text-sm font-bold text-stone-800">역대 회장</h3></div>
+                {isAdmin && <button onClick={()=>{setOfficerYear(currentYear);setOfficerQuarter(currentQuarter);setOfficerMemberId(getCurrentOfficer(currentYear,currentQuarter)?.member_id||'');setShowOfficerModal(true);}} className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-lg font-medium flex items-center gap-1"><Crown size={11}/> 회장 설정</button>}
+              </div>
+              {officers.length>0?(
                 <div className="divide-y divide-stone-100">
                   {[...officers].sort((a,b)=>b.year-a.year||b.quarter-a.quarter).map(o=>{
                     const mName=members.find(m=>m.id===o.member_id)?.name||'?';
                     const isCurrent=o.year===currentYear&&o.quarter===currentQuarter;
-                    return(<div key={o.id} className="px-4 py-3 flex items-center gap-3"><Crown size={14} className={isCurrent?'text-yellow-500':'text-stone-300'}/><div className="flex-1"><span className="font-semibold text-stone-800 text-sm">{mName}</span>{isCurrent&&<span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">현재</span>}</div><span className="text-xs text-stone-500">{o.year}년 {o.quarter}분기</span></div>);
+                    return(<div key={o.id} className="px-4 py-3 flex items-center gap-3"><Crown size={14} className={isCurrent?'text-yellow-500':'text-stone-300'}/><div className="flex-1"><span className="font-semibold text-stone-800 text-sm">{mName}</span>{isCurrent&&<span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">현재</span>}</div><span className="text-xs text-stone-500">{o.year}년 {o.quarter}분기</span><button onClick={()=>deleteOfficer(o.id)} className="text-xs text-stone-300 ml-2">해제</button></div>);
                   })}
                 </div>
-              </div>
-            )}
+              ):<div className="px-4 py-6 text-center text-sm text-stone-400">설정된 회장이 없습니다</div>}
+            </div>
             {getSortedFilteredStats().length===0?<EmptyState icon={Users} title="멤버가 없습니다" desc="아래 + 버튼으로 멤버를 추가하세요"/>:(
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {getSortedFilteredStats().map(member=>(
@@ -2046,9 +2029,19 @@ export default function App() {
         )}
       </main>
 
-      <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-20">
+      <div className="fixed bottom-6 right-4 flex flex-col gap-2 z-20">
         {activeTab==='members'&&isAdmin&&<button onClick={()=>setShowAddMember(true)} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">멤버 추가</span></button>}
         {(activeTab==='matches'||activeTab==='ranking')&&members.length>=2&&<button onClick={()=>openAddMatch()} className="bg-emerald-800 text-white rounded-full shadow-lg px-5 py-3 flex items-center gap-2"><Plus size={18}/><span className="font-medium text-sm">경기 기록</span></button>}
+        {activeTab==='calendar'&&isAdmin&&(
+          <div className="flex gap-2">
+            <button onClick={()=>setShowImportModal(true)} className="bg-white border border-stone-200 text-stone-700 rounded-full shadow-lg px-4 py-3 flex items-center gap-1.5 text-sm font-medium">
+              📋 붙여넣기
+            </button>
+            <button onClick={()=>openAddMatch(selectedDate||today, true)} className="bg-emerald-800 text-white rounded-full shadow-lg px-4 py-3 flex items-center gap-1.5 text-sm font-medium">
+              <Plus size={16}/> 대진 등록
+            </button>
+          </div>
+        )}
       </div>
 
       {showImportModal&&(
