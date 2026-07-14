@@ -97,7 +97,27 @@ export default function App() {
   const [attendanceConfirmed, setAttendanceConfirmed] = useState({});
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [installPrompt, setInstallPrompt] = useState(null); // Android 설치 프롬프트
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [notice, setNotice] = useState(''); // 공지사항
+  const [courtInfo, setCourtInfo] = useState(''); // 코트 정보
+  const [editingNotice, setEditingNotice] = useState(false);
+  const [editingCourt, setEditingCourt] = useState(false);
+  const [noticeInput, setNoticeInput] = useState('');
+  const [courtInput, setCourtInput] = useState('');
+
+  const loadSettings = async () => {
+    const { data } = await supabase.from('app_settings').select('*');
+    if (data) {
+      const n = data.find(d => d.key === 'notice');
+      const c = data.find(d => d.key === 'court_info');
+      if (n) setNotice(n.value || '');
+      if (c) setCourtInfo(c.value || '');
+    }
+  };
+
+  const saveSetting = async (key, value) => {
+    await supabase.from('app_settings').upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  }; // Android 설치 프롬프트
   const [showInstallModal, setShowInstallModal] = useState(false); // iOS 안내 모달
   const [isStandalone, setIsStandalone] = useState(false); // 이미 설치됐는지
 
@@ -316,6 +336,7 @@ export default function App() {
       (ac || []).forEach(a => { acMap[a.attend_date] = a.confirmed; });
       setAttendanceConfirmed(acMap);
       await loadGuests();
+      await loadSettings();
     } catch (e) {
       alert('데이터 로딩 실패: ' + e.message);
     } finally {
@@ -1276,13 +1297,16 @@ export default function App() {
   };
 
   if(loading) return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-800 via-emerald-700 to-emerald-900 flex flex-col items-center justify-center gap-6">
-      <img src="/icon-192.png" alt="소소테니스" className="w-28 h-28 rounded-3xl shadow-2xl animate-pulse"/>
-      <div className="text-center">
-        <div className="text-white text-2xl font-bold tracking-tight">소소테니스클럽</div>
-        <div className="text-emerald-200 text-sm mt-1">SOSO TENNIS CLUB</div>
+    <div className="min-h-screen flex flex-col items-center justify-center" style={{background:'#1a2e1a'}}>
+      <img src="/loading-bg.png" alt="소소테니스" className="w-64 h-64 object-contain"/>
+      <div className="text-center mt-2">
+        <div className="text-white text-4xl font-black tracking-widest">SOSO</div>
+        <div className="text-lime-400 text-sm tracking-[0.4em] font-medium">⚫ TENNIS ⚫</div>
       </div>
-      <div className="text-emerald-300 text-xs tracking-widest mt-4">불러오는 중...</div>
+      <div className="mt-8 flex flex-col items-center gap-2">
+        <div className="w-8 h-8 border-2 border-lime-400 border-t-transparent rounded-full animate-spin"></div>
+        <div className="text-stone-400 text-xs">Loading...</div>
+      </div>
     </div>
   );
 
@@ -1323,32 +1347,67 @@ export default function App() {
 
         {activeTab==='calendar'&&(
           <div className="space-y-4">
-            {/* 오늘의 요약 카드 */}
-            <div className="bg-gradient-to-br from-emerald-800 to-emerald-700 rounded-2xl p-4 text-white">
-              <div className="flex items-center justify-between mb-3">
+            {/* 분기 정보 카드 */}
+            <div className="bg-white rounded-2xl border border-stone-100 shadow-sm overflow-hidden">
+              {/* 분기/회장 헤더 */}
+              <div className="px-4 pt-4 pb-3 flex items-start justify-between">
                 <div>
-                  <div className="text-emerald-200 text-xs">{currentYear}년 {currentQuarter}분기</div>
-                  <div className="text-xl font-bold mt-0.5">소소테니스클럽 🎾</div>
+                  <div className="flex items-center gap-1.5 text-emerald-700 font-bold text-base">
+                    <Calendar size={16}/> {currentYear}년 {currentQuarter}분기
+                  </div>
+                  <div className="text-stone-400 text-xs mt-0.5">
+                    {currentQuarter===1?'1월 ~ 3월':currentQuarter===2?'4월 ~ 6월':currentQuarter===3?'7월 ~ 9월':'10월 ~ 12월'}
+                  </div>
                 </div>
                 {getCurrentOfficer(currentYear,currentQuarter)&&(
                   <div className="text-right">
-                    <div className="text-emerald-300 text-xs">분기 회장</div>
-                    <div className="text-sm font-bold flex items-center gap-1 justify-end"><Crown size={12} className="text-yellow-300"/>{getCurrentOfficer(currentYear,currentQuarter)?.name}</div>
+                    <div className="flex items-center gap-1 justify-end text-amber-500 font-bold text-sm">
+                      <Crown size={13}/>{getCurrentOfficer(currentYear,currentQuarter)?.name}
+                    </div>
+                    <div className="text-stone-400 text-xs">분기 회장</div>
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-white/10 rounded-xl p-2.5 text-center">
-                  <div className="text-2xl font-bold">{matches.filter(m=>!m.isScheduled).length}</div>
-                  <div className="text-emerald-200 text-xs mt-0.5">총 경기</div>
-                </div>
-                <div className="bg-white/10 rounded-xl p-2.5 text-center">
-                  <div className="text-2xl font-bold">{members.length}</div>
-                  <div className="text-emerald-200 text-xs mt-0.5">멤버</div>
-                </div>
-                <div className="bg-white/10 rounded-xl p-2.5 text-center">
-                  <div className="text-2xl font-bold">{Object.keys(attendance).length}</div>
-                  <div className="text-emerald-200 text-xs mt-0.5">활동일</div>
+
+              {/* 공지사항 */}
+              <div className="mx-4 mb-3 bg-emerald-50 rounded-xl px-3 py-2.5 flex items-center gap-2">
+                <span className="text-emerald-600 text-sm flex-shrink-0">📢</span>
+                {editingNotice ? (
+                  <div className="flex-1 flex gap-2">
+                    <input value={noticeInput} onChange={e=>setNoticeInput(e.target.value)}
+                      className="flex-1 text-xs bg-white border border-emerald-200 rounded-lg px-2 py-1" placeholder="공지사항 입력"/>
+                    <button onClick={async()=>{await saveSetting('notice',noticeInput);setNotice(noticeInput);setEditingNotice(false);}} className="text-xs bg-emerald-600 text-white px-2 py-1 rounded-lg">저장</button>
+                    <button onClick={()=>setEditingNotice(false)} className="text-xs text-stone-400 px-1">취소</button>
+                  </div>
+                ) : (
+                  <>
+                    <span className="flex-1 text-xs text-emerald-800">{notice||'공지사항이 없습니다.'}</span>
+                    {isAdmin&&<button onClick={()=>{setNoticeInput(notice);setEditingNotice(true);}} className="flex-shrink-0"><Pencil size={12} className="text-emerald-400"/></button>}
+                  </>
+                )}
+              </div>
+
+              {/* 코트 정보 */}
+              <div className="mx-4 mb-4 flex items-center gap-2 text-xs text-stone-500">
+                <span className="flex items-center gap-1 bg-stone-50 border border-stone-200 rounded-lg px-2.5 py-1.5">
+                  🎾 코트
+                  {editingCourt ? (
+                    <span className="flex items-center gap-1 ml-1">
+                      <input value={courtInput} onChange={e=>setCourtInput(e.target.value)}
+                        className="w-24 text-xs bg-white border border-stone-300 rounded px-1" placeholder="코트 정보"/>
+                      <button onClick={async()=>{await saveSetting('court_info',courtInput);setCourtInfo(courtInput);setEditingCourt(false);}} className="text-emerald-600 font-bold">✓</button>
+                      <button onClick={()=>setEditingCourt(false)} className="text-stone-400">✕</button>
+                    </span>
+                  ) : (
+                    <span className="ml-1 font-medium text-stone-700">{courtInfo||'미설정'}</span>
+                  )}
+                  {isAdmin&&!editingCourt&&<button onClick={()=>{setCourtInput(courtInfo);setEditingCourt(true);}} className="ml-1"><Pencil size={10} className="text-stone-400"/></button>}
+                </span>
+                <div className="flex items-center gap-1.5 bg-stone-50 border border-stone-200 rounded-lg px-2.5 py-1.5">
+                  <span>📊</span>
+                  <span>총 {matches.filter(m=>!m.isScheduled).length}경기</span>
+                  <span className="text-stone-300">·</span>
+                  <span>멤버 {members.length}명</span>
                 </div>
               </div>
             </div>
